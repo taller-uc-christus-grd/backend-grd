@@ -1,0 +1,421 @@
+const express = require('express');
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
+const csv = require('csv-parser');
+const XLSX = require('xlsx');
+const Joi = require('joi');
+
+const router = express.Router();
+
+
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const uploadDir = 'uploads/';
+    if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+    cb(null, uploadDir);
+  },
+  filename: (req, file, cb) => {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
+  }
+});
+const fileFilter = (req, file, cb) => {
+  const allowedMimes = [
+    'text/csv',
+    'application/vnd.ms-excel',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+  ];
+  const allowedExtensions = ['.csv', '.xlsx', '.xls'];
+  const fileExtension = path.extname(file.originalname).toLowerCase();
+  if (allowedMimes.includes(file.mimetype) || allowedExtensions.includes(fileExtension)) cb(null, true);
+  else cb(new Error('Tipo de archivo no permitido. Solo se aceptan archivos CSV y Excel.'), false);
+};
+const upload = multer({
+  storage,
+  fileFilter,
+  limits: { fileSize: 10 * 1024 * 1024, files: 1 }
+});
+
+
+const normalize = (str = '') =>
+  str
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '') // sin acentos
+    .replace(/\s+/g, ' ') // colapsa múltiples espacios
+    .trim()
+    .toLowerCase();
+
+const COLUMN_MAP = new Map([
+  // Identificación
+  [normalize('RUT'), 'paciente_id'],
+  // Fechas
+  [normalize('Fecha Ingreso completa'), 'fecha_ingreso'],
+  // Si en tu archivo se usa “Fecha Completa” como fecha de egreso/alta:
+  [normalize('Fecha Completa'), 'fecha_egreso'],
+  // Diagnósticos
+  [normalize('Diagnóstico   Principal'), 'diagnostico_principal'],
+  [normalize('Conjunto Dx'), 'diagnostico_secundario'],
+  // Procedimientos
+  [normalize('Proced 01 Principal    (cod)'), 'procedimiento'],
+  // Demográficos
+  [normalize('Edad en años'), 'edad'],
+  [normalize('Sexo  (Desc)'), 'sexo'],
+
+  // --- Extras por si llegan con otras variantes comunes ---
+  [normalize('Diagnóstico Principal'), 'diagnostico_principal'],
+  [normalize('Procedimiento Principal (cod)'), 'procedimiento'],
+  [normalize('Sexo (Desc)'), 'sexo'],
+  [normalize('Edad'), 'edad'],
+  [normalize('Fecha Egreso'), 'fecha_egreso'],
+  [normalize('Fecha Alta'), 'fecha_egreso']
+]);
+
+/** Convierte un objeto con headers “reales” → a nuestros campos internos */
+const mapRowToInternal = (row) => {
+  const out = {};
+  for (const [rawKey, value] of Object.entries(row)) {
+    const key = normalize(rawKey);
+    const mapped = COLUMN_MAP.get(key);
+    if (mapped) out[mapped] = value;
+  }
+  return out;
+};
+
+const toNumber = (v) => {
+  if (v === undefined || v === null || v === '') return undefined;
+  const num = Number(String(v).toString().replace(',', '.'));
+  return Number.isFinite(num) ? num : undefined;
+};
+const toInt = (v) => {
+  const n = toNumber(v);
+  return Number.isFinite(n) ? Math.trunc(n) : undefined;
+};
+const toDate = (v) => {
+  if (v === undefined || v === null || v === '') return undefined;
+  // Acepta Date, cadena ISO, o serial Excel
+  if (v instanceof Date && !isNaN(v)) return v;
+  if (typeof v === 'number') {
+    // Excel serial date (base 1900)
+    const excelEpoch = new Date(Date.UTC(1899, 11, 30));
+    const d = new Date(excelEpoch.getTime() + v * 86400000);
+    return isNaN(d) ? undefined : d;
+  }
+  const d = new Date(v);
+  return isNaN(d) ? undefined : d;
+};
+const normSexo = (v) => {
+  if (!v && v !== 0) return undefined;
+  const s = normalize(String(v));
+  if (['m', 'masculino', 'varon', 'hombre'].includes(s)) return 'M';
+  if (['f', 'femenino', 'mujer'].includes(s)) return 'F';
+  return String(v); // deja tal cual si viene algo distinto (se validará si aplica)
+};
+const computeDiasEstancia = (ing, egr) => {
+  if (!(ing instanceof Date) || isNaN(ing) || !(egr instanceof Date) || isNaN(egr)) return undefined;
+  const diff = Math.round((egr - ing) / 86400000);
+  return diff >= 0 ? diff : undefined;
+};
+
+const episodeSchema = Joi.object({
+  paciente_id: Joi.string().required().min(1).messages({
+    'string.empty': 'El ID del paciente es requerido',
+    'any.required': 'El ID del paciente es requerido'
+  }),
+  fecha_ingreso: Joi.date().required().messages({
+    'date.base': 'La fecha de ingreso debe ser una fecha válida',
+    'any.required': 'La fecha de ingreso es requerida'
+  }),
+  fecha_egreso: Joi.date().allow(null).optional(),
+  diagnostico_principal: Joi.string().required().min(1).messages({
+    'string.empty': 'El diagnóstico principal es requerido',
+    'any.required': 'El diagnóstico principal es requerido'
+  }),
+  diagnostico_secundario: Joi.string().allow('', null).optional(),
+  procedimiento: Joi.string().allow('', null).optional(),
+  edad: Joi.number().integer().min(0).max(120).required().messages({
+    'number.base': 'La edad debe ser un número',
+    'number.integer': 'La edad debe ser un número entero',
+    'number.min': 'La edad debe ser mayor o igual a 0',
+    'number.max': 'La edad debe ser menor o igual a 120',
+    'any.required': 'La edad es requerida'
+  }),
+  sexo: Joi.string().valid('M', 'F', 'Masculino', 'Femenino').required().messages({
+    'any.only': 'El sexo debe ser M, F, Masculino o Femenino',
+    'any.required': 'El sexo es requerido'
+  }),
+  peso: Joi.number().positive().allow(null).optional(),
+  talla: Joi.number().positive().allow(null).optional(),
+  dias_estancia: Joi.number().integer().min(0).allow(null).optional()
+}).unknown(false);
+
+
+const normalizeRow = (mappedRow) => {
+  // Convertimos tipos si están presentes
+  const out = { ...mappedRow };
+
+  if ('edad' in out) out.edad = toInt(out.edad);
+  if ('sexo' in out) out.sexo = normSexo(out.sexo);
+
+  if ('fecha_ingreso' in out) out.fecha_ingreso = toDate(out.fecha_ingreso) || null;
+  if ('fecha_egreso' in out) out.fecha_egreso = toDate(out.fecha_egreso) || null;
+
+  // Si no viene dias_estancia, lo inferimos si se puede:
+  if (!('dias_estancia' in out) || out.dias_estancia == null) {
+    const d = computeDiasEstancia(out.fecha_ingreso, out.fecha_egreso);
+    if (Number.isFinite(d)) out.dias_estancia = d;
+  } else {
+    out.dias_estancia = toInt(out.dias_estancia);
+  }
+
+  // Limpieza de strings
+  ['paciente_id','diagnostico_principal','diagnostico_secundario','procedimiento'].forEach(k => {
+    if (k in out && out[k] != null) out[k] = String(out[k]).trim();
+  });
+
+  return out;
+};
+
+const processCSV = (filePath) => {
+  return new Promise((resolve, reject) => {
+    const results = [];
+    const errors = [];
+    let rowIdx = 0;
+
+    fs.createReadStream(filePath)
+      .pipe(csv({ mapHeaders: ({ header }) => header })) // preserva header original
+      .on('data', (raw) => {
+        rowIdx += 1;
+        try {
+          const mapped = mapRowToInternal(raw);       // mapea a nuestros campos
+          const normalized = normalizeRow(mapped);    // castea tipos / calcula días
+          
+          // Validar que al menos algunos campos requeridos estén presentes
+          if (!mapped.paciente_id && !mapped.fecha_ingreso && !mapped.diagnostico_principal) {
+            errors.push({ 
+              row: rowIdx, 
+              error: 'Fila vacía o sin datos válidos', 
+              data: raw 
+            });
+            return;
+          }
+          
+          const { error, value } = episodeSchema.validate(normalized, { 
+            convert: false, 
+            abortEarly: true,
+            stripUnknown: true
+          });
+          
+          if (error) {
+            errors.push({ 
+              row: rowIdx, 
+              error: error.details[0].message, 
+              data: normalized 
+            });
+          } else {
+            results.push(value);
+          }
+        } catch (err) {
+          errors.push({ 
+            row: rowIdx, 
+            error: 'Error al procesar fila: ' + err.message, 
+            data: raw 
+          });
+        }
+      })
+      .on('end', () => resolve({ results, errors }))
+      .on('error', (err) => reject(err));
+  });
+};
+
+const processExcel = (filePath) => {
+  try {
+    const workbook = XLSX.readFile(filePath, { cellDates: true });
+    const sheetName = workbook.SheetNames[0];
+    const worksheet = workbook.Sheets[sheetName];
+    const data = XLSX.utils.sheet_to_json(worksheet, { raw: false, defval: null });
+
+    const results = [];
+    const errors = [];
+
+    data.forEach((raw, i) => {
+      try {
+        const mapped = mapRowToInternal(raw);
+        const normalized = normalizeRow(mapped);
+        
+        // Validar que al menos algunos campos requeridos estén presentes
+        if (!mapped.paciente_id && !mapped.fecha_ingreso && !mapped.diagnostico_principal) {
+          errors.push({ 
+            row: i + 1, 
+            error: 'Fila vacía o sin datos válidos', 
+            data: raw 
+          });
+          return;
+        }
+        
+        const { error, value } = episodeSchema.validate(normalized, { 
+          convert: false, 
+          abortEarly: true,
+          stripUnknown: true
+        });
+        
+        if (error) {
+          errors.push({ 
+            row: i + 1, 
+            error: error.details[0].message, 
+            data: normalized 
+          });
+        } else {
+          results.push(value);
+        }
+      } catch (err) {
+        errors.push({ 
+          row: i + 1, 
+          error: 'Error al procesar fila: ' + err.message, 
+          data: raw 
+        });
+      }
+    });
+
+    return { results, errors };
+  } catch (err) {
+    throw new Error('Error al leer archivo Excel: ' + err.message);
+  }
+};
+
+router.post('/upload', upload.single('file'), async (req, res) => {
+  let filePath = null;
+  
+  try {
+    // Validar que se subió un archivo
+    if (!req.file) {
+      return res.status(400).json({ 
+        error: 'No se proporcionó ningún archivo', 
+        message: 'Debe enviar un archivo CSV o Excel' 
+      });
+    }
+
+    filePath = req.file.path;
+    const ext = path.extname(req.file.originalname).toLowerCase();
+
+    console.log(`📁 Procesando archivo: ${req.file.originalname} (${req.file.size} bytes)`);
+
+    // Validar formato de archivo
+    if (!['.csv', '.xlsx', '.xls'].includes(ext)) {
+      if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+      return res.status(400).json({ 
+        error: 'Formato de archivo no soportado', 
+        message: 'Solo se aceptan archivos CSV y Excel (.csv, .xlsx, .xls)' 
+      });
+    }
+
+    let processedData;
+    
+    try {
+      if (ext === '.csv') {
+        processedData = await processCSV(filePath);
+      } else if (ext === '.xlsx' || ext === '.xls') {
+        processedData = processExcel(filePath);
+      }
+    } catch (processError) {
+      console.error('Error procesando archivo:', processError);
+      if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+      return res.status(500).json({ 
+        error: 'Error procesando archivo', 
+        message: processError.message 
+      });
+    }
+
+    // Limpieza del archivo temporal
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+      filePath = null;
+    }
+
+    // Preparar respuesta
+    const response = {
+      success: true,
+      message: 'Archivo procesado exitosamente',
+      summary: {
+        total_rows: processedData.results.length + processedData.errors.length,
+        valid_rows: processedData.results.length,
+        invalid_rows: processedData.errors.length,
+        file_name: req.file.originalname,
+        file_size: req.file.size,
+        processed_at: new Date().toISOString()
+      },
+      data: processedData.results,
+      errors: processedData.errors
+    };
+
+    // Agregar advertencias si hay errores
+    if (processedData.errors.length > 0) {
+      response.warnings = {
+        message: 'Se encontraron errores en algunas filas',
+        error_count: processedData.errors.length,
+        error_details: processedData.errors.slice(0, 10) // Mostrar solo los primeros 10 errores
+      };
+    }
+
+    console.log(`✅ Procesamiento completado: ${processedData.results.length} válidos, ${processedData.errors.length} errores`);
+    res.json(response);
+
+  } catch (error) {
+    console.error('Error general procesando archivo:', error);
+    
+    // Limpiar archivo temporal en caso de error
+    if (filePath && fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+    }
+    
+    res.status(500).json({ 
+      error: 'Error interno del servidor', 
+      message: process.env.NODE_ENV === 'development' ? error.message : 'Error procesando archivo' 
+    });
+  }
+});
+
+// Endpoint GET para información del endpoint
+router.get('/upload/info', (req, res) => {
+  res.json({
+    endpoint: '/api/upload',
+    method: 'POST',
+    description: 'Endpoint para subir archivos CSV/Excel con datos clínicos de episodios',
+    accepted_formats: ['CSV (.csv)', 'Excel (.xlsx, .xls)'],
+    max_file_size: '10MB',
+    required_fields: [
+      'paciente_id',
+      'fecha_ingreso', 
+      'diagnostico_principal',
+      'edad',
+      'sexo'
+    ],
+    optional_fields: [
+      'fecha_egreso',
+      'diagnostico_secundario',
+      'procedimiento',
+      'peso',
+      'talla',
+      'dias_estancia'
+    ],
+    column_mapping_examples: {
+      'RUT': 'paciente_id',
+      'Fecha Ingreso completa': 'fecha_ingreso',
+      'Fecha Completa': 'fecha_egreso',
+      'Diagnóstico   Principal': 'diagnostico_principal',
+      'Conjunto Dx': 'diagnostico_secundario',
+      'Proced 01 Principal    (cod)': 'procedimiento',
+      'Edad en años': 'edad',
+      'Sexo  (Desc)': 'sexo'
+    },
+    example_usage: {
+      method: 'POST',
+      url: '/api/upload',
+      headers: {
+        'Content-Type': 'multipart/form-data'
+      },
+      body: 'file: [archivo CSV/Excel]'
+    }
+  });
+});
+
+module.exports = router;

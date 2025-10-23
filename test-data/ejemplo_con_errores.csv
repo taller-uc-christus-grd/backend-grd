@@ -1,0 +1,11 @@
+paciente_id,fecha_ingreso,diagnostico_principal,edad,sexo
+P001,2024-01-01,Neumonía,65,M
+P002,2024-01-02,Infarto agudo,58,F
+P003,2024-01-03,Apendicitis aguda,32,M
+P004,,Fractura de cadera,78,F
+P005,2024-01-05,Neumonía bacteriana,72,M
+P006,2024-01-06,Accidente cerebrovascular,81,F
+P007,2024-01-07,Colecistitis aguda,45,F
+P008,2024-01-08,Insuficiencia cardíaca,69,M
+P009,2024-01-09,Neumonía viral,55,F
+P010,2024-01-10,Fractura de fémur,76,M

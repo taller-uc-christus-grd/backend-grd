@@ -1,0 +1,11 @@
+paciente_id,fecha_ingreso,fecha_egreso,diagnostico_principal,diagnostico_secundario,procedimiento,edad,sexo,peso,talla,dias_estancia
+P001,2024-01-01,2024-01-05,Neumonía,Diabetes,Oxigenoterapia,65,M,70,170,4
+P002,2024-01-02,2024-01-08,Infarto agudo,Hipertensión,Angioplastia,58,F,65,160,6
+P003,2024-01-03,2024-01-07,Apendicitis aguda,,Apendicectomía,32,M,75,175,4
+P004,2024-01-04,,Fractura de cadera,Osteoporosis,Artroplastia,78,F,60,155,
+P005,2024-01-05,2024-01-10,Neumonía bacteriana,EPOC,Antibióticos,72,M,68,168,5
+P006,2024-01-06,2024-01-09,Accidente cerebrovascular,Hipertensión,Fisioterapia,81,F,55,150,3
+P007,2024-01-07,2024-01-12,Colecistitis aguda,,Colecistectomía,45,F,62,165,5
+P008,2024-01-08,2024-01-11,Insuficiencia cardíaca,Diabetes,Diuréticos,69,M,80,172,3
+P009,2024-01-09,2024-01-14,Neumonía viral,,Antivirales,55,F,58,162,5
+P010,2024-01-10,2024-01-13,Fractura de fémur,Osteoporosis,Fijación interna,76,M,72,174,3
