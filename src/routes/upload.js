@@ -48,27 +48,135 @@ const normalize = (str = '') =>
 const COLUMN_MAP = new Map([
   // Identificación
   [normalize('RUT'), 'paciente_id'],
+  [normalize('paciente_id'), 'paciente_id'],
+  [normalize('id_paciente'), 'paciente_id'],
+  [normalize('pacienteId'), 'paciente_id'],
+  [normalize('nombre_paciente'), 'paciente_id'], // Mapeo adicional
+  [normalize('id'), 'paciente_id'],
+  [normalize('patient_id'), 'paciente_id'],
   // Fechas
   [normalize('Fecha Ingreso completa'), 'fecha_ingreso'],
-  // Si en tu archivo se usa “Fecha Completa” como fecha de egreso/alta:
+  [normalize('fecha_ingreso'), 'fecha_ingreso'],
+  [normalize('fechaIngreso'), 'fecha_ingreso'],
+  [normalize('fecha ingreso'), 'fecha_ingreso'],
+  [normalize('fecha'), 'fecha_ingreso'], // Mapeo adicional
+  [normalize('date'), 'fecha_ingreso'],
+  [normalize('ingreso'), 'fecha_ingreso'],
+  // Si en tu archivo se usa "Fecha Completa" como fecha de egreso/alta:
   [normalize('Fecha Completa'), 'fecha_egreso'],
+  [normalize('fecha_egreso'), 'fecha_egreso'],
+  [normalize('fechaEgreso'), 'fecha_egreso'],
+  [normalize('fecha egreso'), 'fecha_egreso'],
+  [normalize('Fecha Egreso'), 'fecha_egreso'],
+  [normalize('Fecha Alta'), 'fecha_egreso'],
   // Diagnósticos
   [normalize('Diagnóstico   Principal'), 'diagnostico_principal'],
+  [normalize('diagnostico_principal'), 'diagnostico_principal'],
+  [normalize('diagnosticoPrincipal'), 'diagnostico_principal'],
+  [normalize('Diagnóstico Principal'), 'diagnostico_principal'],
+  [normalize('diagnostico principal'), 'diagnostico_principal'],
+  [normalize('diagnostico'), 'diagnostico_principal'], // Mapeo adicional
+  [normalize('diagnosis'), 'diagnostico_principal'],
+  [normalize('dx'), 'diagnostico_principal'],
   [normalize('Conjunto Dx'), 'diagnostico_secundario'],
+  [normalize('diagnostico_secundario'), 'diagnostico_secundario'],
+  [normalize('diagnosticoSecundario'), 'diagnostico_secundario'],
+  [normalize('diagnostico secundario'), 'diagnostico_secundario'],
   // Procedimientos
   [normalize('Proced 01 Principal    (cod)'), 'procedimiento'],
+  [normalize('procedimiento'), 'procedimiento'],
+  [normalize('Procedimiento Principal (cod)'), 'procedimiento'],
+  [normalize('procedimiento principal'), 'procedimiento'],
   // Demográficos
   [normalize('Edad en años'), 'edad'],
+  [normalize('edad'), 'edad'],
+  [normalize('age'), 'edad'],
+  [normalize('anios'), 'edad'], // Mapeo adicional
+  [normalize('años'), 'edad'],
   [normalize('Sexo  (Desc)'), 'sexo'],
-
-  // --- Extras por si llegan con otras variantes comunes ---
-  [normalize('Diagnóstico Principal'), 'diagnostico_principal'],
-  [normalize('Procedimiento Principal (cod)'), 'procedimiento'],
+  [normalize('sexo'), 'sexo'],
   [normalize('Sexo (Desc)'), 'sexo'],
-  [normalize('Edad'), 'edad'],
-  [normalize('Fecha Egreso'), 'fecha_egreso'],
-  [normalize('Fecha Alta'), 'fecha_egreso']
+  [normalize('genero'), 'sexo'],
+  [normalize('género'), 'sexo'],
+  [normalize('sex'), 'sexo'],
+  [normalize('gender'), 'sexo'],
+  [normalize('genero'), 'sexo'], // Mapeo adicional
+  // Campos opcionales
+  [normalize('peso'), 'peso'],
+  [normalize('talla'), 'talla'],
+  [normalize('dias_estancia'), 'dias_estancia'],
+  [normalize('dias estancia'), 'dias_estancia'],
+  [normalize('días_estancia'), 'dias_estancia'],
+  [normalize('días estancia'), 'dias_estancia']
 ]);
+
+// Columnas requeridas mínimas para validar estructura
+const REQUIRED_COLUMNS = [
+  'paciente_id',
+  'fecha_ingreso', 
+  'diagnostico_principal',
+  'edad',
+  'sexo'
+];
+
+// Función para validar estructura de columnas
+const validateColumnStructure = (headers) => {
+  const errors = [];
+  const warnings = [];
+  const foundColumns = new Set();
+  
+  // Normalizar headers del archivo
+  const normalizedHeaders = headers.map(header => normalize(header));
+  
+  // Verificar columnas requeridas
+  for (const requiredCol of REQUIRED_COLUMNS) {
+    let found = false;
+    let foundVariants = [];
+    
+    // Buscar variantes de la columna requerida
+    for (const [mappedKey, mappedValue] of COLUMN_MAP.entries()) {
+      if (mappedValue === requiredCol) {
+        foundVariants.push(mappedKey);
+        if (normalizedHeaders.includes(mappedKey)) {
+          found = true;
+          foundColumns.add(requiredCol);
+          break;
+        }
+      }
+    }
+    
+    if (!found) {
+      errors.push({
+        column: requiredCol,
+        message: `Columna requerida '${requiredCol}' no encontrada`,
+        suggested_variants: foundVariants.slice(0, 3), // Mostrar solo las primeras 3 variantes
+        available_columns: headers
+      });
+    }
+  }
+  
+  // Verificar columnas no reconocidas
+  const recognizedColumns = new Set();
+  for (const header of normalizedHeaders) {
+    if (COLUMN_MAP.has(header)) {
+      recognizedColumns.add(header);
+    } else {
+      warnings.push({
+        column: header,
+        message: `Columna '${header}' no reconocida`,
+        suggestion: 'Verificar nombre de columna o agregar mapeo'
+      });
+    }
+  }
+  
+  return {
+    valid: errors.length === 0,
+    errors,
+    warnings,
+    foundColumns: Array.from(foundColumns),
+    recognizedColumns: Array.from(recognizedColumns)
+  };
+};
 
 /** Convierte un objeto con headers “reales” → a nuestros campos internos */
 const mapRowToInternal = (row) => {
@@ -179,12 +287,60 @@ const processCSV = (filePath) => {
   return new Promise((resolve, reject) => {
     const results = [];
     const errors = [];
+    const structureErrors = [];
+    const warnings = [];
     let rowIdx = 0;
+    let headers = [];
+    let structureValidated = false;
+    let shouldStopProcessing = false;
 
     fs.createReadStream(filePath)
       .pipe(csv({ mapHeaders: ({ header }) => header })) // preserva header original
       .on('data', (raw) => {
+        if (shouldStopProcessing) return;
+        
         rowIdx += 1;
+        
+        // Validar estructura de columnas solo en la primera fila
+        if (!structureValidated && rowIdx === 1) {
+          headers = Object.keys(raw);
+          console.log(`🔍 Validando estructura de columnas:`, headers);
+          
+          const structureValidation = validateColumnStructure(headers);
+          console.log(`📊 Resultado validación:`, {
+            valid: structureValidation.valid,
+            errors: structureValidation.errors.length,
+            warnings: structureValidation.warnings.length
+          });
+          
+          if (!structureValidation.valid) {
+            structureErrors.push(...structureValidation.errors);
+            console.log(`❌ Errores de estructura encontrados:`, structureValidation.errors);
+            shouldStopProcessing = true;
+            // Forzar resolución inmediata con errores de estructura
+            resolve({ 
+              results: [], 
+              errors: [], 
+              structureErrors, 
+              warnings,
+              headers: headers.length > 0 ? headers : undefined
+            });
+            return;
+          }
+          
+          if (structureValidation.warnings.length > 0) {
+            warnings.push(...structureValidation.warnings);
+            console.log(`⚠️ Advertencias de estructura:`, structureValidation.warnings);
+          }
+          
+          structureValidated = true;
+        }
+        
+        // Si hay errores de estructura, no procesar filas
+        if (shouldStopProcessing) {
+          return;
+        }
+        
         try {
           const mapped = mapRowToInternal(raw);       // mapea a nuestros campos
           const normalized = normalizeRow(mapped);    // castea tipos / calcula días
@@ -222,7 +378,16 @@ const processCSV = (filePath) => {
           });
         }
       })
-      .on('end', () => resolve({ results, errors }))
+      .on('end', () => {
+        console.log(`🏁 Finalizando procesamiento CSV. Errores estructura: ${structureErrors.length}`);
+        resolve({ 
+          results, 
+          errors, 
+          structureErrors, 
+          warnings,
+          headers: headers.length > 0 ? headers : undefined
+        });
+      })
       .on('error', (err) => reject(err));
   });
 };
@@ -236,47 +401,73 @@ const processExcel = (filePath) => {
 
     const results = [];
     const errors = [];
+    const structureErrors = [];
+    const warnings = [];
+    let headers = [];
 
-    data.forEach((raw, i) => {
-      try {
-        const mapped = mapRowToInternal(raw);
-        const normalized = normalizeRow(mapped);
-        
-        // Validar que al menos algunos campos requeridos estén presentes
-        if (!mapped.paciente_id && !mapped.fecha_ingreso && !mapped.diagnostico_principal) {
+    // Validar estructura de columnas si hay datos
+    if (data.length > 0) {
+      headers = Object.keys(data[0]);
+      const structureValidation = validateColumnStructure(headers);
+      
+      if (!structureValidation.valid) {
+        structureErrors.push(...structureValidation.errors);
+      }
+      
+      if (structureValidation.warnings.length > 0) {
+        warnings.push(...structureValidation.warnings);
+      }
+    }
+
+    // Si hay errores de estructura críticos, no procesar filas
+    if (structureErrors.length === 0) {
+      data.forEach((raw, i) => {
+        try {
+          const mapped = mapRowToInternal(raw);
+          const normalized = normalizeRow(mapped);
+          
+          // Validar que al menos algunos campos requeridos estén presentes
+          if (!mapped.paciente_id && !mapped.fecha_ingreso && !mapped.diagnostico_principal) {
+            errors.push({ 
+              row: i + 1, 
+              error: 'Fila vacía o sin datos válidos', 
+              data: raw 
+            });
+            return;
+          }
+          
+          const { error, value } = episodeSchema.validate(normalized, { 
+            convert: false, 
+            abortEarly: true,
+            stripUnknown: true
+          });
+          
+          if (error) {
+            errors.push({ 
+              row: i + 1, 
+              error: error.details[0].message, 
+              data: normalized 
+            });
+          } else {
+            results.push(value);
+          }
+        } catch (err) {
           errors.push({ 
             row: i + 1, 
-            error: 'Fila vacía o sin datos válidos', 
+            error: 'Error al procesar fila: ' + err.message, 
             data: raw 
           });
-          return;
         }
-        
-        const { error, value } = episodeSchema.validate(normalized, { 
-          convert: false, 
-          abortEarly: true,
-          stripUnknown: true
-        });
-        
-        if (error) {
-          errors.push({ 
-            row: i + 1, 
-            error: error.details[0].message, 
-            data: normalized 
-          });
-        } else {
-          results.push(value);
-        }
-      } catch (err) {
-        errors.push({ 
-          row: i + 1, 
-          error: 'Error al procesar fila: ' + err.message, 
-          data: raw 
-        });
-      }
-    });
+      });
+    }
 
-    return { results, errors };
+    return { 
+      results, 
+      errors, 
+      structureErrors, 
+      warnings,
+      headers: headers.length > 0 ? headers : undefined
+    };
   } catch (err) {
     throw new Error('Error al leer archivo Excel: ' + err.message);
   }
@@ -331,6 +522,24 @@ router.post('/upload', upload.single('file'), async (req, res) => {
       filePath = null;
     }
 
+    // Verificar errores de estructura de columnas
+    if (processedData.structureErrors && processedData.structureErrors.length > 0) {
+      console.log(`❌ Errores de estructura de columnas: ${processedData.structureErrors.length}`);
+      return res.status(400).json({
+        success: false,
+        error: 'Estructura de columnas inválida',
+        message: 'El archivo no contiene las columnas requeridas',
+        structure_errors: processedData.structureErrors,
+        available_columns: processedData.headers || [],
+        required_columns: REQUIRED_COLUMNS,
+        suggestions: processedData.structureErrors.map(err => ({
+          column: err.column,
+          message: err.message,
+          suggested_variants: err.suggested_variants
+        }))
+      });
+    }
+
     // Preparar respuesta
     const response = {
       success: true,
@@ -341,18 +550,29 @@ router.post('/upload', upload.single('file'), async (req, res) => {
         invalid_rows: processedData.errors.length,
         file_name: req.file.originalname,
         file_size: req.file.size,
-        processed_at: new Date().toISOString()
+        processed_at: new Date().toISOString(),
+        columns_found: processedData.headers || [],
+        structure_valid: true
       },
       data: processedData.results,
       errors: processedData.errors
     };
 
-    // Agregar advertencias si hay errores
+    // Agregar advertencias si hay errores de datos
     if (processedData.errors.length > 0) {
       response.warnings = {
         message: 'Se encontraron errores en algunas filas',
         error_count: processedData.errors.length,
         error_details: processedData.errors.slice(0, 10) // Mostrar solo los primeros 10 errores
+      };
+    }
+
+    // Agregar advertencias de estructura si las hay
+    if (processedData.warnings && processedData.warnings.length > 0) {
+      response.structure_warnings = {
+        message: 'Se encontraron columnas no reconocidas',
+        warning_count: processedData.warnings.length,
+        warning_details: processedData.warnings.slice(0, 5) // Mostrar solo las primeras 5 advertencias
       };
     }
 
@@ -382,6 +602,11 @@ router.get('/upload/info', (req, res) => {
     description: 'Endpoint para subir archivos CSV/Excel con datos clínicos de episodios',
     accepted_formats: ['CSV (.csv)', 'Excel (.xlsx, .xls)'],
     max_file_size: '10MB',
+    validation: {
+      column_structure: 'Validación automática de nombres de columnas',
+      required_columns: 'Columnas obligatorias para el procesamiento',
+      data_validation: 'Validación de tipos y rangos de datos'
+    },
     required_fields: [
       'paciente_id',
       'fecha_ingreso', 
@@ -406,6 +631,18 @@ router.get('/upload/info', (req, res) => {
       'Proced 01 Principal    (cod)': 'procedimiento',
       'Edad en años': 'edad',
       'Sexo  (Desc)': 'sexo'
+    },
+    supported_column_variants: {
+      'paciente_id': ['RUT', 'paciente_id', 'id_paciente', 'pacienteId'],
+      'fecha_ingreso': ['Fecha Ingreso completa', 'fecha_ingreso', 'fechaIngreso'],
+      'diagnostico_principal': ['Diagnóstico Principal', 'diagnostico_principal', 'diagnosticoPrincipal'],
+      'edad': ['Edad en años', 'edad', 'age'],
+      'sexo': ['Sexo (Desc)', 'sexo', 'genero', 'género', 'sex']
+    },
+    error_responses: {
+      structure_errors: '400 - Errores de estructura de columnas',
+      data_errors: '200 - Errores en filas específicas',
+      processing_errors: '500 - Errores de procesamiento'
     },
     example_usage: {
       method: 'POST',
