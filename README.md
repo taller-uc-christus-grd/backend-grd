@@ -1,6 +1,6 @@
 # Backend GRD - UC Christus
 
-Sistema backend para el procesamiento de datos clínicos de episodios GRD (Grupos Relacionados por Diagnóstico) para UC Christus.
+Sistema backend para el procesamiento, y exportacion de datos clínicos de episodios GRD (Grupos Relacionados por Diagnóstico) para UC Christus.
 
 ## 🚀 Características
 
@@ -20,22 +20,26 @@ Sistema backend para el procesamiento de datos clínicos de episodios GRD (Grupo
 ## 🛠️ Instalación
 
 1. Clonar el repositorio:
+
 ```bash
 git clone <repository-url>
 cd backend-grd
 ```
 
 2. Instalar dependencias:
+
 ```bash
 npm install
 ```
 
 3. Ejecutar en modo desarrollo:
+
 ```bash
 npm run dev
 ```
 
 4. Ejecutar en producción:
+
 ```bash
 npm start
 ```
@@ -47,15 +51,18 @@ npm start
 Sube un archivo CSV o Excel con datos clínicos de episodios.
 
 **Parámetros:**
+
 - `file` (multipart/form-data): Archivo CSV o Excel
 
 **Formatos soportados:**
+
 - CSV (.csv)
 - Excel (.xlsx, .xls)
 
 **Tamaño máximo:** 10MB
 
 **Campos requeridos:**
+
 - `paciente_id`: ID único del paciente
 - `fecha_ingreso`: Fecha de ingreso (YYYY-MM-DD)
 - `diagnostico_principal`: Diagnóstico principal
@@ -63,6 +70,7 @@ Sube un archivo CSV o Excel con datos clínicos de episodios.
 - `sexo`: Sexo (M/F, Masculino/Femenino)
 
 **Campos opcionales:**
+
 - `fecha_egreso`: Fecha de egreso
 - `diagnostico_secundario`: Diagnóstico secundario
 - `procedimiento`: Procedimiento realizado
@@ -71,6 +79,7 @@ Sube un archivo CSV o Excel con datos clínicos de episodios.
 - `dias_estancia`: Días de estancia
 
 **Ejemplo de uso:**
+
 ```bash
 curl -X POST \
   http://localhost:3000/api/upload \
@@ -79,6 +88,7 @@ curl -X POST \
 ```
 
 **Respuesta exitosa:**
+
 ```json
 {
   "success": true,
@@ -127,9 +137,9 @@ P002,2024-01-02,,Infarto agudo,Hipertensión,58,F,65,160
 ### Ejemplo de archivo Excel
 
 | paciente_id | fecha_ingreso | fecha_egreso | diagnostico_principal | edad | sexo |
-|-------------|---------------|--------------|----------------------|-----|------|
-| P001        | 2024-01-01    | 2024-01-05   | Neumonía             | 65  | M    |
-| P002        | 2024-01-02    |              | Infarto agudo        | 58  | F    |
+| ----------- | ------------- | ------------ | --------------------- | ---- | ---- |
+| P001        | 2024-01-01    | 2024-01-05   | Neumonía              | 65   | M    |
+| P002        | 2024-01-02    |              | Infarto agudo         | 58   | F    |
 
 ## 🧪 Testing
 
@@ -140,6 +150,7 @@ npm test
 ## 📝 Logs
 
 El sistema registra:
+
 - Archivos procesados
 - Errores de validación
 - Errores de procesamiento
