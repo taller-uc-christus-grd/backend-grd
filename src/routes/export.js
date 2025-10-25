@@ -138,6 +138,25 @@ router.get('/export', requireAuth, requireExportPermission, async (req, res) => 
     // 2) Transformar al layout exacto (29 columnas)
     const sheetData = [];
 
+    // --- Metadatos / trazabilidad (añadido) ---
+    const user = req.user || { id: 'anon', name: 'anon', email: '' };
+    const metadata = {
+      generatedBy: { id: user.id, name: user.name, email: user.email },
+      generatedAt: new Date().toISOString(),
+      grdType: req.query.type || 'FONASA',
+      filters: { desde, hasta, centro, validado },
+      requestId: req.headers['x-request-id'] || '',
+      systemVersion: process.env.npm_package_version || 'dev'
+    };
+
+    // Insertar metadatos como encabezado (líneas que empiezan con "# key: value")
+    Object.entries(metadata).forEach(([k, v]) => {
+      const value = (typeof v === 'object') ? JSON.stringify(v) : String(v);
+      sheetData.push([`# ${k}:`, value]);
+    });
+    sheetData.push([]); // fila separadora
+    // --- fin metadatos ---
+
     // Encabezados EXACTOS
     const headers = [
       'Unnamed: 0', 'VALIDADO', 'Centro', 'N° Folio', 'Episodio', 'Rut Paciente',
@@ -196,6 +215,12 @@ router.get('/export', requireAuth, requireExportPermission, async (req, res) => 
     // 4) Generar workbook
     const wb = XLSX.utils.book_new();
     const ws = XLSX.utils.aoa_to_sheet(sheetData);
+
+    // Añadir hoja separada con metadatos (clave / valor) para auditoría (añadido)
+    const metaSheetData = Object.entries(metadata).map(([k, v]) => [k, (typeof v === 'object') ? JSON.stringify(v) : String(v)]);
+    const metaWs = XLSX.utils.aoa_to_sheet(metaSheetData);
+    XLSX.utils.book_append_sheet(wb, metaWs, 'Metadata');
+
     XLSX.utils.book_append_sheet(wb, ws, 'FONASA');
 
     // 5) Escribir a buffer y responder descarga
