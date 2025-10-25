@@ -1,16 +1,36 @@
 const express = require('express');
 const XLSX = require('xlsx');
+const fs = require('fs');
+const path = require('path');
 const router = express.Router();
 
 // Middlewares de ejemplo
 const requireAuth = (req, res, next) => {
-  // Verifica JWT/sesión
-  // if (!req.user) return res.status(401).json({ error: 'unauthorized' });
+  // Verifica JWT/sesión (simple: exige que req.user exista)
+  // En producción, reemplazar por tu middleware de auth real.
+  if (!req.user) {
+    return res.status(401).json({ error: 'unauthorized' });
+  }
   next();
 };
 
 const requireExportPermission = (req, res, next) => {
-  // if (!req.user.permissions.includes('canExportFonasa')) return res.status(403).json({ error: 'forbidden' });
+  // Validación por roles: solo usuarios autorizados pueden descargar la planilla.
+  // Roles permitidos según HU:
+  const ALLOWED_ROLES = [
+    'Usuario Ciclo de Ingresos / Finanzas',
+    'Usuario Coordinador / Gestión'
+  ];
+
+  const user = req.user || {};
+  const roles = [];
+  if (Array.isArray(user.roles)) roles.push(...user.roles);
+  if (typeof user.role === 'string') roles.push(user.role);
+  // normalizar espacios y comparar
+  const hasRole = roles.some(r => ALLOWED_ROLES.includes(String(r).trim()));
+  if (!hasRole) {
+    return res.status(403).json({ error: 'forbidden', message: 'no tiene permisos para exportar' });
+  }
   next();
 };
 
@@ -23,6 +43,32 @@ const toExcelDate = (d) => {
   return dt.toISOString().slice(0, 10);
 };
 
+// Registrar acción de exportación en log simple (archivo)
+const auditDir = path.join(__dirname, '..', '..', 'logs');
+const auditFile = path.join(auditDir, 'export-audit.log');
+async function logExportAction({ user, metadata, filename }) {
+  try {
+    await fs.promises.mkdir(auditDir, { recursive: true });
+    const entry = {
+      ts: new Date().toISOString(),
+      user: {
+        id: user?.id ?? null,
+        name: user?.name ?? null,
+        email: user?.email ?? null,
+        roles: user?.roles ?? user?.role ?? null
+      },
+      requestId: metadata?.requestId ?? null,
+      filters: metadata?.filters ?? null,
+      grdType: metadata?.grdType ?? null,
+      filename
+    };
+    await fs.promises.appendFile(auditFile, JSON.stringify(entry) + '\n', 'utf8');
+    console.info('🔒 Export audit saved:', entry);
+  } catch (err) {
+    console.error('Failed to write export audit:', err);
+  }
+}
+ 
 // Simulación de datos procesados (en producción vendría de BD)
 const getProcessedData = async (filters) => {
   const { desde, hasta, centro, validado } = filters;
@@ -227,6 +273,9 @@ router.get('/export', requireAuth, requireExportPermission, async (req, res) => 
     const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
     const ts = new Date().toISOString().replace(/[-:]/g, '').slice(0, 15);
     const filename = `FONASA_export_${ts}.xlsx`;
+
+    // Log de auditoría: registrar usuario que lanza la exportación
+    logExportAction({ user, metadata, filename }).catch(() => {/* ya logueado en la función */});
 
     console.log(`✅ Archivo Excel generado: ${filename} (${buf.length} bytes)`);
 
