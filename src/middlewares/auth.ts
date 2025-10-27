@@ -3,21 +3,15 @@ import { verifyTokenRaw } from '../utils/jwt';
 
 declare global {
   namespace Express {
-    interface Request {
-      user?: { id: string; role: string };
-    }
+    interface Request { user?: { id: string; role: string }; }
   }
 }
 
 export function requireAuth(req: Request, res: Response, next: NextFunction) {
-  const auth = req.headers.authorization;
-  if (!auth?.startsWith('Bearer ')) {
-    return res.status(401).json({ message: 'Falta token Bearer' });
-  }
-  const token = auth.split(' ')[1];
+  const h = req.headers.authorization;
+  if (!h?.startsWith('Bearer ')) return res.status(401).json({ message: 'Falta token Bearer' });
   try {
-    const decoded = verifyTokenRaw(token);
-    req.user = decoded;
+    req.user = verifyTokenRaw(h.split(' ')[1]);
     next();
   } catch {
     return res.status(401).json({ message: 'Token inválido o expirado' });
