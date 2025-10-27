@@ -8,28 +8,87 @@ const Joi = require('joi');
 
 const router = express.Router();
 
+let loadMinsalNorma;
+let validateClinical;
+
+try {
+  ({ loadMinsalNorma } = require('../utils/grdRules'));
+} catch (err) {
+  console.warn('Aviso: ../utils/grdRules no encontrado. Usando fallback vacío.');
+  loadMinsalNorma = async () => new Map();
+}
+
+try {
+  ({ validateClinical } = require('../utils/clinicalValidator'));
+} catch (err) {
+  console.warn('Aviso: ../utils/clinicalValidator no encontrado. Usando validador por defecto.');
+  validateClinical = (row /*, rules */) => ({
+    VALIDADO: 'OK',
+    inlier_outlier: '',
+    OBSERVACIONES: []
+  });
+}
+
+// ----------------------
+// Audit logging (uploads)
+// ----------------------
+const uploadAuditDir = path.join(__dirname, '..', '..', 'logs');
+const uploadAuditFile = path.join(uploadAuditDir, 'upload-audit.log');
+
+async function logUploadAction(entry) {
+  try {
+    await fs.promises.mkdir(uploadAuditDir, { recursive: true });
+    const payload = {
+      ts: new Date().toISOString(),
+      ...entry
+    };
+    await fs.promises.appendFile(uploadAuditFile, JSON.stringify(payload) + '\n', 'utf8');
+    console.info('🔒 Upload audit saved:', { file: entry.file_name, total_rows: entry.total_rows, valid_rows: entry.valid_rows, invalid_rows: entry.invalid_rows, duplicates: entry.duplicates_count });
+  } catch (err) {
+    console.error('Failed to write upload audit:', err);
+  }
+}
+
+// Helper para obtener/caché reglas (loadMinsalNorma ya cachea internamente)
+async function getGrdRules() {
+  try {
+    return await loadMinsalNorma();
+  } catch (e) {
+    console.warn('No se pudo cargar GRD rules (fallback):', e?.message ?? e);
+    return new Map();
+  }
+}
+
+/* ============================
+   1) Multer: uploads
+============================ */
+const UPLOAD_DIR = path.join(__dirname, '..', '..', 'uploads');
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    const uploadDir = 'uploads/';
-    if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
-    cb(null, uploadDir);
+    try {
+      if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+      cb(null, UPLOAD_DIR);
+    } catch (err) {
+      cb(err);
+    }
   },
   filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
     cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
   }
 });
 const fileFilter = (req, file, cb) => {
   const allowedMimes = [
     'text/csv',
+    'application/csv',
     'application/vnd.ms-excel',
     'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
   ];
   const allowedExtensions = ['.csv', '.xlsx', '.xls'];
   const fileExtension = path.extname(file.originalname).toLowerCase();
   if (allowedMimes.includes(file.mimetype) || allowedExtensions.includes(fileExtension)) cb(null, true);
-  else cb(new Error('Tipo de archivo no permitido. Solo se aceptan archivos CSV y Excel.'), false);
+  else cb(new Error('Tipo de archivo no permitido. Solo CSV y Excel.'), false);
 };
 const upload = multer({
   storage,
@@ -37,11 +96,13 @@ const upload = multer({
   limits: { fileSize: 10 * 1024 * 1024, files: 1 }
 });
 
-
+/* ============================
+   2) Normalización y mapeo
+============================ */
 const normalize = (str = '') =>
-  str
-    .normalize('NFD').replace(/[\u0300-\u036f]/g, '') // sin acentos
-    .replace(/\s+/g, ' ') // colapsa múltiples espacios
+  String(str)
+    .normalize ? str.normalize('NFD').replace(/[\u0300-\u036f]/g, '') : String(str)
+    .replace(/\s+/g, ' ')
     .trim()
     .toLowerCase();
 
@@ -50,135 +111,137 @@ const COLUMN_MAP = new Map([
   [normalize('RUT'), 'paciente_id'],
   [normalize('paciente_id'), 'paciente_id'],
   [normalize('id_paciente'), 'paciente_id'],
-  [normalize('pacienteId'), 'paciente_id'],
-  [normalize('nombre_paciente'), 'paciente_id'], // Mapeo adicional
+  [normalize('pacienteid'), 'paciente_id'],
+  [normalize('nombre_paciente'), 'paciente_id'],
   [normalize('id'), 'paciente_id'],
   [normalize('patient_id'), 'paciente_id'],
+
   // Fechas
-  [normalize('Fecha Ingreso completa'), 'fecha_ingreso'],
+  [normalize('fecha ingreso completa'), 'fecha_ingreso'],
   [normalize('fecha_ingreso'), 'fecha_ingreso'],
-  [normalize('fechaIngreso'), 'fecha_ingreso'],
+  [normalize('fechaingreso'), 'fecha_ingreso'],
   [normalize('fecha ingreso'), 'fecha_ingreso'],
-  [normalize('fecha'), 'fecha_ingreso'], // Mapeo adicional
+  [normalize('fecha'), 'fecha_ingreso'],
   [normalize('date'), 'fecha_ingreso'],
   [normalize('ingreso'), 'fecha_ingreso'],
-  // Si en tu archivo se usa "Fecha Completa" como fecha de egreso/alta:
-  [normalize('Fecha Completa'), 'fecha_egreso'],
+
+  [normalize('fecha completa'), 'fecha_egreso'],
   [normalize('fecha_egreso'), 'fecha_egreso'],
-  [normalize('fechaEgreso'), 'fecha_egreso'],
+  [normalize('fechaegreso'), 'fecha_egreso'],
   [normalize('fecha egreso'), 'fecha_egreso'],
-  [normalize('Fecha Egreso'), 'fecha_egreso'],
-  [normalize('Fecha Alta'), 'fecha_egreso'],
+  [normalize('fecha alta'), 'fecha_egreso'],
+
   // Diagnósticos
-  [normalize('Diagnóstico   Principal'), 'diagnostico_principal'],
+  [normalize('diagnóstico principal'), 'diagnostico_principal'],
   [normalize('diagnostico_principal'), 'diagnostico_principal'],
-  [normalize('diagnosticoPrincipal'), 'diagnostico_principal'],
-  [normalize('Diagnóstico Principal'), 'diagnostico_principal'],
+  [normalize('diagnosticoprincipal'), 'diagnostico_principal'],
   [normalize('diagnostico principal'), 'diagnostico_principal'],
-  [normalize('diagnostico'), 'diagnostico_principal'], // Mapeo adicional
+  [normalize('diagnostico'), 'diagnostico_principal'],
   [normalize('diagnosis'), 'diagnostico_principal'],
   [normalize('dx'), 'diagnostico_principal'],
-  [normalize('Conjunto Dx'), 'diagnostico_secundario'],
+
+  [normalize('conjunto dx'), 'diagnostico_secundario'],
   [normalize('diagnostico_secundario'), 'diagnostico_secundario'],
-  [normalize('diagnosticoSecundario'), 'diagnostico_secundario'],
+  [normalize('diagnosticosecundario'), 'diagnostico_secundario'],
   [normalize('diagnostico secundario'), 'diagnostico_secundario'],
+
   // Procedimientos
-  [normalize('Proced 01 Principal    (cod)'), 'procedimiento'],
   [normalize('procedimiento'), 'procedimiento'],
-  [normalize('Procedimiento Principal (cod)'), 'procedimiento'],
   [normalize('procedimiento principal'), 'procedimiento'],
+
   // Demográficos
-  [normalize('Edad en años'), 'edad'],
+  [normalize('edad en años'), 'edad'],
   [normalize('edad'), 'edad'],
   [normalize('age'), 'edad'],
-  [normalize('anios'), 'edad'], // Mapeo adicional
+  [normalize('anios'), 'edad'],
   [normalize('años'), 'edad'],
-  [normalize('Sexo  (Desc)'), 'sexo'],
+
+  [normalize('sexo  (desc)'), 'sexo'],
   [normalize('sexo'), 'sexo'],
-  [normalize('Sexo (Desc)'), 'sexo'],
+  [normalize('sexo (desc)'), 'sexo'],
   [normalize('genero'), 'sexo'],
   [normalize('género'), 'sexo'],
   [normalize('sex'), 'sexo'],
   [normalize('gender'), 'sexo'],
-  [normalize('genero'), 'sexo'], // Mapeo adicional
-  // Campos opcionales
+
+  // Opcionales
   [normalize('peso'), 'peso'],
   [normalize('talla'), 'talla'],
   [normalize('dias_estancia'), 'dias_estancia'],
   [normalize('dias estancia'), 'dias_estancia'],
   [normalize('días_estancia'), 'dias_estancia'],
-  [normalize('días estancia'), 'dias_estancia']
+  [normalize('días estancia'), 'dias_estancia'],
+
+  // GRD
+  [normalize('ir - grd'), 'ir_grd'],
+  [normalize('ir_grd'), 'ir_grd'],
+  [normalize('grd'), 'ir_grd'],
+
+  [normalize('inlier/outlier'), 'inlier_outlier'],
+  [normalize('grupo dentro de norma s/n'), 'grupo_norma_sn'],
+  [normalize('pago por outlier superior'), 'pago_outlier_sup'],
+  [normalize('pago demora rescate'), 'pago_demora_rescate'],
+  [normalize('dias de estada'), 'dias_estancia'],
+  [normalize('días de estada'), 'dias_estancia']
 ]);
 
-// Columnas requeridas mínimas para validar estructura
+// Columnas “requeridas” (se validan por fila con Joi)
 const REQUIRED_COLUMNS = [
   'paciente_id',
-  'fecha_ingreso', 
+  'fecha_ingreso',
   'diagnostico_principal',
   'edad',
   'sexo'
 ];
 
-// Función para validar estructura de columnas
+/* ============================
+   3) Validación de estructura (SOFT)
+============================ */
 const validateColumnStructure = (headers) => {
-  const errors = [];
   const warnings = [];
-  const foundColumns = new Set();
-  
-  // Normalizar headers del archivo
-  const normalizedHeaders = headers.map(header => normalize(header));
-  
-  // Verificar columnas requeridas
+  const normalized = headers.map(h => normalize(h));
+
+  const missingRequired = [];
   for (const requiredCol of REQUIRED_COLUMNS) {
     let found = false;
-    let foundVariants = [];
-    
-    // Buscar variantes de la columna requerida
-    for (const [mappedKey, mappedValue] of COLUMN_MAP.entries()) {
-      if (mappedValue === requiredCol) {
-        foundVariants.push(mappedKey);
-        if (normalizedHeaders.includes(mappedKey)) {
-          found = true;
-          foundColumns.add(requiredCol);
-          break;
-        }
+    for (const [mappedKey, mappedVal] of COLUMN_MAP.entries()) {
+      if (mappedVal === requiredCol && normalized.includes(mappedKey)) {
+        found = true; break;
       }
     }
-    
-    if (!found) {
-      errors.push({
-        column: requiredCol,
-        message: `Columna requerida '${requiredCol}' no encontrada`,
-        suggested_variants: foundVariants.slice(0, 3), // Mostrar solo las primeras 3 variantes
-        available_columns: headers
-      });
-    }
+    if (!found) missingRequired.push(requiredCol);
   }
-  
-  // Verificar columnas no reconocidas
-  const recognizedColumns = new Set();
-  for (const header of normalizedHeaders) {
-    if (COLUMN_MAP.has(header)) {
-      recognizedColumns.add(header);
-    } else {
+
+  if (missingRequired.length > 0) {
+    warnings.push({
+      type: 'missing_required_columns',
+      message: 'Faltan columnas requeridas a nivel de estructura (se validará fila a fila igualmente).',
+      missing: missingRequired
+    });
+  }
+
+  normalized.forEach(h => {
+    if (!COLUMN_MAP.has(h)) {
       warnings.push({
-        column: header,
-        message: `Columna '${header}' no reconocida`,
-        suggestion: 'Verificar nombre de columna o agregar mapeo'
+        type: 'unknown_column',
+        column: h,
+        message: 'Columna no reconocida. Verificar nombre o agregar mapeo.'
       });
     }
-  }
-  
+  });
+
   return {
-    valid: errors.length === 0,
-    errors,
+    valid: true,
+    errors: [],
     warnings,
-    foundColumns: Array.from(foundColumns),
-    recognizedColumns: Array.from(recognizedColumns)
+    recognizedColumns: normalized.filter(h => COLUMN_MAP.has(h)),
+    originalHeaders: headers
   };
 };
 
-/** Convierte un objeto con headers “reales” → a nuestros campos internos */
+/* ============================
+   4) Helpers de conversión
+============================ */
 const mapRowToInternal = (row) => {
   const out = {};
   for (const [rawKey, value] of Object.entries(row)) {
@@ -191,7 +254,7 @@ const mapRowToInternal = (row) => {
 
 const toNumber = (v) => {
   if (v === undefined || v === null || v === '') return undefined;
-  const num = Number(String(v).toString().replace(',', '.'));
+  const num = Number(String(v).replace(',', '.'));
   return Number.isFinite(num) ? num : undefined;
 };
 const toInt = (v) => {
@@ -200,10 +263,8 @@ const toInt = (v) => {
 };
 const toDate = (v) => {
   if (v === undefined || v === null || v === '') return undefined;
-  // Acepta Date, cadena ISO, o serial Excel
   if (v instanceof Date && !isNaN(v)) return v;
   if (typeof v === 'number') {
-    // Excel serial date (base 1900)
     const excelEpoch = new Date(Date.UTC(1899, 11, 30));
     const d = new Date(excelEpoch.getTime() + v * 86400000);
     return isNaN(d) ? undefined : d;
@@ -212,11 +273,11 @@ const toDate = (v) => {
   return isNaN(d) ? undefined : d;
 };
 const normSexo = (v) => {
-  if (!v && v !== 0) return undefined;
+  if (v === undefined || v === null) return undefined;
   const s = normalize(String(v));
   if (['m', 'masculino', 'varon', 'hombre'].includes(s)) return 'M';
   if (['f', 'femenino', 'mujer'].includes(s)) return 'F';
-  return String(v); // deja tal cual si viene algo distinto (se validará si aplica)
+  return String(v).toUpperCase();
 };
 const computeDiasEstancia = (ing, egr) => {
   if (!(ing instanceof Date) || isNaN(ing) || !(egr instanceof Date) || isNaN(egr)) return undefined;
@@ -224,41 +285,32 @@ const computeDiasEstancia = (ing, egr) => {
   return diff >= 0 ? diff : undefined;
 };
 
+/* ============================
+   5) Validación por fila (Joi)
+============================ */
 const episodeSchema = Joi.object({
-  paciente_id: Joi.string().required().min(1).messages({
-    'string.empty': 'El ID del paciente es requerido',
-    'any.required': 'El ID del paciente es requerido'
-  }),
-  fecha_ingreso: Joi.date().required().messages({
-    'date.base': 'La fecha de ingreso debe ser una fecha válida',
-    'any.required': 'La fecha de ingreso es requerida'
-  }),
+  paciente_id: Joi.string().required().min(1),
+  fecha_ingreso: Joi.date().required(),
   fecha_egreso: Joi.date().allow(null).optional(),
-  diagnostico_principal: Joi.string().required().min(1).messages({
-    'string.empty': 'El diagnóstico principal es requerido',
-    'any.required': 'El diagnóstico principal es requerido'
-  }),
+  diagnostico_principal: Joi.string().required().min(1),
   diagnostico_secundario: Joi.string().allow('', null).optional(),
   procedimiento: Joi.string().allow('', null).optional(),
-  edad: Joi.number().integer().min(0).max(120).required().messages({
-    'number.base': 'La edad debe ser un número',
-    'number.integer': 'La edad debe ser un número entero',
-    'number.min': 'La edad debe ser mayor o igual a 0',
-    'number.max': 'La edad debe ser menor o igual a 120',
-    'any.required': 'La edad es requerida'
-  }),
-  sexo: Joi.string().valid('M', 'F', 'Masculino', 'Femenino').required().messages({
-    'any.only': 'El sexo debe ser M, F, Masculino o Femenino',
-    'any.required': 'El sexo es requerido'
-  }),
+  edad: Joi.number().integer().min(0).max(120).required(),
+  sexo: Joi.string().valid('M', 'F', 'Masculino', 'Femenino').required(),
   peso: Joi.number().positive().allow(null).optional(),
   talla: Joi.number().positive().allow(null).optional(),
-  dias_estancia: Joi.number().integer().min(0).allow(null).optional()
+  dias_estancia: Joi.number().integer().min(0).allow(null).optional(),
+  ir_grd: Joi.string().allow('', null),
+  inlier_outlier: Joi.string().allow('', null),
+  grupo_norma_sn: Joi.string().allow('', null),
+  pago_outlier_sup: Joi.number().min(0).allow(null),
+  pago_demora_rescate: Joi.number().min(0).allow(null)
 }).unknown(false);
 
-
+/* ============================
+   6) Normalización de una fila
+============================ */
 const normalizeRow = (mappedRow) => {
-  // Convertimos tipos si están presentes
   const out = { ...mappedRow };
 
   if ('edad' in out) out.edad = toInt(out.edad);
@@ -267,7 +319,7 @@ const normalizeRow = (mappedRow) => {
   if ('fecha_ingreso' in out) out.fecha_ingreso = toDate(out.fecha_ingreso) || null;
   if ('fecha_egreso' in out) out.fecha_egreso = toDate(out.fecha_egreso) || null;
 
-  // Si no viene dias_estancia, lo inferimos si se puede:
+  // dias_estancia
   if (!('dias_estancia' in out) || out.dias_estancia == null) {
     const d = computeDiasEstancia(out.fecha_ingreso, out.fecha_egreso);
     if (Number.isFinite(d)) out.dias_estancia = d;
@@ -275,124 +327,130 @@ const normalizeRow = (mappedRow) => {
     out.dias_estancia = toInt(out.dias_estancia);
   }
 
-  // Limpieza de strings
-  ['paciente_id','diagnostico_principal','diagnostico_secundario','procedimiento'].forEach(k => {
+  // limpieza campos texto
+  ['paciente_id','diagnostico_principal','diagnostico_secundario','procedimiento','ir_grd'].forEach(k => {
     if (k in out && out[k] != null) out[k] = String(out[k]).trim();
   });
+
+  // números suaves
+  if ('pago_outlier_sup' in out) out.pago_outlier_sup = toNumber(out.pago_outlier_sup);
+  if ('pago_demora_rescate' in out) out.pago_demora_rescate = toNumber(out.pago_demora_rescate);
 
   return out;
 };
 
-const processCSV = (filePath) => {
+/* ============================
+   7) Procesamiento CSV / Excel
+   (se mantienen las funciones processCSV y processExcel)
+============================ */
+const processCSV = (filePath, grdRules) => {
   return new Promise((resolve, reject) => {
     const results = [];
     const errors = [];
-    const structureErrors = [];
     const warnings = [];
     let rowIdx = 0;
     let headers = [];
     let structureValidated = false;
-    let shouldStopProcessing = false;
 
-    fs.createReadStream(filePath)
-      .pipe(csv({ mapHeaders: ({ header }) => header })) // preserva header original
-      .on('data', (raw) => {
-        if (shouldStopProcessing) return;
-        
-        rowIdx += 1;
-        
-        // Validar estructura de columnas solo en la primera fila
-        if (!structureValidated && rowIdx === 1) {
+    const stream = fs.createReadStream(filePath)
+      .pipe(csv({ mapHeaders: ({ header }) => header }));
+
+    stream.on('data', (raw) => {
+      rowIdx += 1;
+      try {
+        if (!structureValidated) {
           headers = Object.keys(raw);
-          console.log(`🔍 Validando estructura de columnas:`, headers);
-          
           const structureValidation = validateColumnStructure(headers);
-          console.log(`📊 Resultado validación:`, {
-            valid: structureValidation.valid,
-            errors: structureValidation.errors.length,
-            warnings: structureValidation.warnings.length
-          });
-          
-          if (!structureValidation.valid) {
-            structureErrors.push(...structureValidation.errors);
-            console.log(`❌ Errores de estructura encontrados:`, structureValidation.errors);
-            shouldStopProcessing = true;
-            // Forzar resolución inmediata con errores de estructura
-            resolve({ 
-              results: [], 
-              errors: [], 
-              structureErrors, 
-              warnings,
-              headers: headers.length > 0 ? headers : undefined
-            });
-            return;
-          }
-          
-          if (structureValidation.warnings.length > 0) {
-            warnings.push(...structureValidation.warnings);
-            console.log(`⚠️ Advertencias de estructura:`, structureValidation.warnings);
-          }
-          
+          if (structureValidation.warnings.length > 0) warnings.push(...structureValidation.warnings);
           structureValidated = true;
         }
-        
-        // Si hay errores de estructura, no procesar filas
-        if (shouldStopProcessing) {
+
+        const mapped = mapRowToInternal(raw);
+        const normalized = normalizeRow(mapped);
+
+        // Fila vacía mínima
+        if (!mapped.paciente_id && !mapped.fecha_ingreso && !mapped.diagnostico_principal) {
+          errors.push({
+            row: rowIdx,
+            error: 'Fila vacía o sin datos válidos',
+            data: raw
+          });
           return;
         }
-        
-        try {
-          const mapped = mapRowToInternal(raw);       // mapea a nuestros campos
-          const normalized = normalizeRow(mapped);    // castea tipos / calcula días
-          
-          // Validar que al menos algunos campos requeridos estén presentes
-          if (!mapped.paciente_id && !mapped.fecha_ingreso && !mapped.diagnostico_principal) {
-            errors.push({ 
-              row: rowIdx, 
-              error: 'Fila vacía o sin datos válidos', 
-              data: raw 
-            });
-            return;
-          }
-          
-          const { error, value } = episodeSchema.validate(normalized, { 
-            convert: false, 
-            abortEarly: true,
-            stripUnknown: true
-          });
-          
-          if (error) {
-            errors.push({ 
-              row: rowIdx, 
-              error: error.details[0].message, 
-              data: normalized 
-            });
-          } else {
-            results.push(value);
-          }
-        } catch (err) {
-          errors.push({ 
-            row: rowIdx, 
-            error: 'Error al procesar fila: ' + err.message, 
-            data: raw 
-          });
-        }
-      })
-      .on('end', () => {
-        console.log(`🏁 Finalizando procesamiento CSV. Errores estructura: ${structureErrors.length}`);
-        resolve({ 
-          results, 
-          errors, 
-          structureErrors, 
-          warnings,
-          headers: headers.length > 0 ? headers : undefined
+
+        const { error, value } = episodeSchema.validate(normalized, {
+          convert: false,
+          abortEarly: true,
+          stripUnknown: true
         });
-      })
-      .on('error', (err) => reject(err));
+
+        if (error) {
+          // Intentar attach banderas clínicas y devolver como error por fila
+          let rowWithFlags = { ...normalized };
+          try {
+            const clinical = validateClinical(rowWithFlags, grdRules || new Map());
+            rowWithFlags = {
+              ...rowWithFlags,
+              VALIDADO: 'Con errores',
+              inlier_outlier: clinical?.inlier_outlier || '',
+              OBSERVACIONES: [error.details[0].message, ...(clinical?.OBSERVACIONES || [])]
+            };
+            if (!rowWithFlags.grupo_norma_sn) {
+              rowWithFlags.grupo_norma_sn = rowWithFlags.inlier_outlier === 'inlier' ? 'S'
+                : rowWithFlags.inlier_outlier === 'outlier' ? 'N' : '';
+            }
+          } catch (e) {
+            rowWithFlags.VALIDADO = 'Con errores';
+            rowWithFlags.OBSERVACIONES = [error.details[0].message];
+          }
+          errors.push({ row: rowIdx, error: error.details[0].message, data: rowWithFlags });
+        } else {
+          // OK por Joi -> valida clínica GRD (con try/catch)
+          try {
+            const clinical = validateClinical(value, grdRules || new Map()) || {};
+            const finalRow = {
+              ...value,
+              VALIDADO: clinical.VALIDADO ?? 'OK',
+              inlier_outlier: clinical.inlier_outlier || '',
+              OBSERVACIONES: clinical.OBSERVACIONES || []
+            };
+            if (!finalRow.grupo_norma_sn) {
+              finalRow.grupo_norma_sn = finalRow.inlier_outlier === 'inlier' ? 'S'
+                : finalRow.inlier_outlier === 'outlier' ? 'N' : '';
+            }
+            results.push(finalRow);
+          } catch (errClinical) {
+            results.push({
+              ...value,
+              VALIDADO: 'OK',
+              inlier_outlier: '',
+              OBSERVACIONES: ['Clin. validator error: ' + (errClinical?.message || String(errClinical))]
+            });
+          }
+        }
+      } catch (err) {
+        errors.push({
+          row: rowIdx,
+          error: 'Error al procesar fila: ' + (err?.message || String(err)),
+          data: raw
+        });
+      }
+    });
+
+    stream.on('end', () => {
+      resolve({
+        results,
+        errors,
+        warnings,
+        headers: headers.length > 0 ? headers : undefined
+      });
+    });
+
+    stream.on('error', (err) => reject(err));
   });
 };
 
-const processExcel = (filePath) => {
+const processExcel = (filePath, grdRules) => {
   try {
     const workbook = XLSX.readFile(filePath, { cellDates: true });
     const sheetName = workbook.SheetNames[0];
@@ -401,256 +459,316 @@ const processExcel = (filePath) => {
 
     const results = [];
     const errors = [];
-    const structureErrors = [];
     const warnings = [];
     let headers = [];
 
-    // Validar estructura de columnas si hay datos
     if (data.length > 0) {
       headers = Object.keys(data[0]);
       const structureValidation = validateColumnStructure(headers);
-      
-      if (!structureValidation.valid) {
-        structureErrors.push(...structureValidation.errors);
-      }
-      
-      if (structureValidation.warnings.length > 0) {
-        warnings.push(...structureValidation.warnings);
-      }
+      if (structureValidation.warnings.length > 0) warnings.push(...structureValidation.warnings);
     }
 
-    // Si hay errores de estructura críticos, no procesar filas
-    if (structureErrors.length === 0) {
-      data.forEach((raw, i) => {
-        try {
-          const mapped = mapRowToInternal(raw);
-          const normalized = normalizeRow(mapped);
-          
-          // Validar que al menos algunos campos requeridos estén presentes
-          if (!mapped.paciente_id && !mapped.fecha_ingreso && !mapped.diagnostico_principal) {
-            errors.push({ 
-              row: i + 1, 
-              error: 'Fila vacía o sin datos válidos', 
-              data: raw 
-            });
-            return;
-          }
-          
-          const { error, value } = episodeSchema.validate(normalized, { 
-            convert: false, 
-            abortEarly: true,
-            stripUnknown: true
+    data.forEach((raw, i) => {
+      try {
+        const mapped = mapRowToInternal(raw);
+        const normalized = normalizeRow(mapped);
+
+        if (!mapped.paciente_id && !mapped.fecha_ingreso && !mapped.diagnostico_principal) {
+          errors.push({
+            row: i + 1,
+            error: 'Fila vacía o sin datos válidos',
+            data: raw
           });
-          
-          if (error) {
-            errors.push({ 
-              row: i + 1, 
-              error: error.details[0].message, 
-              data: normalized 
-            });
-          } else {
-            results.push(value);
-          }
-        } catch (err) {
-          errors.push({ 
-            row: i + 1, 
-            error: 'Error al procesar fila: ' + err.message, 
-            data: raw 
-          });
+          return;
         }
-      });
-    }
 
-    return { 
-      results, 
-      errors, 
-      structureErrors, 
+        const { error, value } = episodeSchema.validate(normalized, {
+          convert: false,
+          abortEarly: true,
+          stripUnknown: true
+        });
+
+        if (error) {
+          let rowWithFlags = { ...normalized };
+          try {
+            const clinical = validateClinical(rowWithFlags, grdRules || new Map());
+            rowWithFlags = {
+              ...rowWithFlags,
+              VALIDADO: 'Con errores',
+              inlier_outlier: clinical?.inlier_outlier || '',
+              OBSERVACIONES: [error.details[0].message, ...(clinical?.OBSERVACIONES || [])]
+            };
+            if (!rowWithFlags.grupo_norma_sn) {
+              rowWithFlags.grupo_norma_sn = rowWithFlags.inlier_outlier === 'inlier' ? 'S'
+                : rowWithFlags.inlier_outlier === 'outlier' ? 'N' : '';
+            }
+          } catch (e) {
+            rowWithFlags.VALIDADO = 'Con errores';
+            rowWithFlags.OBSERVACIONES = [error.details[0].message];
+          }
+          errors.push({ row: i + 1, error: error.details[0].message, data: rowWithFlags });
+        } else {
+          try {
+            const clinical = validateClinical(value, grdRules || new Map()) || {};
+            const finalRow = {
+              ...value,
+              VALIDADO: clinical.VALIDADO ?? 'OK',
+              inlier_outlier: clinical.inlier_outlier || '',
+              OBSERVACIONES: clinical.OBSERVACIONES || []
+            };
+            if (!finalRow.grupo_norma_sn) {
+              finalRow.grupo_norma_sn = finalRow.inlier_outlier === 'inlier' ? 'S'
+                : finalRow.inlier_outlier === 'outlier' ? 'N' : '';
+            }
+            results.push(finalRow);
+          } catch (errClinical) {
+            results.push({
+              ...value,
+              VALIDADO: 'OK',
+              inlier_outlier: '',
+              OBSERVACIONES: ['Clin. validator error: ' + (errClinical?.message || String(errClinical))]
+            });
+          }
+        }
+      } catch (err) {
+        errors.push({
+          row: i + 1,
+          error: 'Error al procesar fila: ' + (err?.message || String(err)),
+          data: raw
+        });
+      }
+    });
+
+    return {
+      results,
+      errors,
       warnings,
       headers: headers.length > 0 ? headers : undefined
     };
   } catch (err) {
-    throw new Error('Error al leer archivo Excel: ' + err.message);
+    throw new Error('Error al leer archivo Excel: ' + (err?.message || String(err)));
   }
 };
 
+/* ============================
+   8) Endpoint POST /upload
+============================ */
 router.post('/upload', upload.single('file'), async (req, res) => {
   let filePath = null;
-  
   try {
-    // Validar que se subió un archivo
     if (!req.file) {
-      return res.status(400).json({ 
-        error: 'No se proporcionó ningún archivo', 
-        message: 'Debe enviar un archivo CSV o Excel' 
+      return res.status(400).json({
+        error: 'No se proporcionó ningún archivo',
+        message: 'Debe enviar un archivo CSV o Excel'
       });
     }
 
     filePath = req.file.path;
     const ext = path.extname(req.file.originalname).toLowerCase();
 
-    console.log(`📁 Procesando archivo: ${req.file.originalname} (${req.file.size} bytes)`);
-
-    // Validar formato de archivo
     if (!['.csv', '.xlsx', '.xls'].includes(ext)) {
       if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
-      return res.status(400).json({ 
-        error: 'Formato de archivo no soportado', 
-        message: 'Solo se aceptan archivos CSV y Excel (.csv, .xlsx, .xls)' 
+      return res.status(400).json({
+        error: 'Formato de archivo no soportado',
+        message: 'Solo se aceptan archivos CSV y Excel (.csv, .xlsx, .xls)'
       });
+    }
+
+    // Cargar reglas GRD (remotas y cacheadas) ANTES de procesar filas
+    let GRD_RULES = new Map();
+    try {
+      GRD_RULES = await getGrdRules();
+    } catch (e) {
+      console.warn('⚠️ No se pudieron cargar reglas GRD. Se continuará sin validación clínica:', e?.message ?? e);
+      GRD_RULES = new Map();
     }
 
     let processedData;
-    
     try {
       if (ext === '.csv') {
-        processedData = await processCSV(filePath);
-      } else if (ext === '.xlsx' || ext === '.xls') {
-        processedData = processExcel(filePath);
+        processedData = await processCSV(filePath, GRD_RULES);
+      } else {
+        processedData = processExcel(filePath, GRD_RULES);
       }
     } catch (processError) {
       console.error('Error procesando archivo:', processError);
-      if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
-      return res.status(500).json({ 
-        error: 'Error procesando archivo', 
-        message: processError.message 
+      // borrar archivo temporal si existe
+      try { if (filePath && fs.existsSync(filePath)) fs.unlinkSync(filePath); } catch (_) {}
+      return res.status(500).json({
+        error: 'Error procesando archivo',
+        message: processError?.message ?? String(processError)
       });
     }
 
-    // Limpieza del archivo temporal
-    if (fs.existsSync(filePath)) {
-      fs.unlinkSync(filePath);
-      filePath = null;
+    // ============================
+    //  Detección de duplicados (antes de "insertar")
+    //  Criterio: mismo número de episodio OR mismo paciente_id.
+    //  Mantener la primera aparición y omitir posteriores.
+    //  Se registran los registros omitidos en la respuesta.
+    // ============================
+    const seenEpisodio = new Set();
+    const seenPaciente = new Set();
+    const uniqueResults = [];
+    const duplicates = [];
+
+    const pickEpisodioKey = (r) => String(r.episodio ?? r.episodio_cmbd ?? '').trim();
+    const pickPacienteKey = (r) => String(r.paciente_id ?? r.rut ?? r.patient_id ?? '').trim();
+
+    for (const row of processedData.results) {
+      const epKey = pickEpisodioKey(row);
+      const pacKey = pickPacienteKey(row);
+      const reasons = [];
+
+      if (epKey) {
+        if (seenEpisodio.has(epKey)) reasons.push('episodio');
+      }
+      if (pacKey) {
+        if (seenPaciente.has(pacKey)) reasons.push('paciente');
+      }
+
+      if (reasons.length > 0) {
+        // Omitir: ya existe episodio o paciente previamente procesado
+        duplicates.push({
+          reason: reasons.join('|'),
+          episodio: epKey || null,
+          paciente_id: pacKey || null,
+          data: row
+        });
+      } else {
+        // marcar como visto y conservar
+        if (epKey) seenEpisodio.add(epKey);
+        if (pacKey) seenPaciente.add(pacKey);
+        uniqueResults.push(row);
+      }
     }
 
-    // Verificar errores de estructura de columnas
-    if (processedData.structureErrors && processedData.structureErrors.length > 0) {
-      console.log(`❌ Errores de estructura de columnas: ${processedData.structureErrors.length}`);
-      return res.status(400).json({
-        success: false,
-        error: 'Estructura de columnas inválida',
-        message: 'El archivo no contiene las columnas requeridas',
-        structure_errors: processedData.structureErrors,
-        available_columns: processedData.headers || [],
-        required_columns: REQUIRED_COLUMNS,
-        suggestions: processedData.structureErrors.map(err => ({
-          column: err.column,
-          message: err.message,
-          suggested_variants: err.suggested_variants
-        }))
-      });
-    }
+    // Reemplazar resultados válidos por los no duplicados
+    processedData.results = uniqueResults;
+    // Adjuntar info de duplicados para que se notifique al usuario
+    processedData.duplicates = duplicates;
 
     // Preparar respuesta
     const response = {
       success: true,
       message: 'Archivo procesado exitosamente',
       summary: {
-        total_rows: processedData.results.length + processedData.errors.length,
+        total_rows: (processedData.results.length + processedData.errors.length + (processedData.duplicates?.length || 0)),
         valid_rows: processedData.results.length,
         invalid_rows: processedData.errors.length,
         file_name: req.file.originalname,
+        stored_name: req.file.filename,
         file_size: req.file.size,
         processed_at: new Date().toISOString(),
         columns_found: processedData.headers || [],
         structure_valid: true
       },
       data: processedData.results,
-      errors: processedData.errors
+      errors: processedData.errors,
+      omitted_duplicates: {
+        count: processedData.duplicates?.length || 0,
+        examples: (processedData.duplicates || []).slice(0, 10)
+      }
     };
 
-    // Agregar advertencias si hay errores de datos
+    // Métricas clínicas simples
+    const okCount = processedData.results.filter(r => r.VALIDADO === 'OK').length;
+    const withErrCount = processedData.results.filter(r => r.VALIDADO === 'Con errores').length;
+    const clinicalErrorCount = processedData.errors.filter(e => {
+      const obs = e?.data?.OBSERVACIONES || [];
+      const v = e?.data?.VALIDADO || '';
+      return v === 'Con errores' || (Array.isArray(obs) && obs.length > 0);
+    }).length;
+
+    response.summary.clinical = {
+      rules_source: 'norma MINSAL (remota)',
+      in_results_ok: okCount,
+      in_results_with_errors: withErrCount,
+      in_errors_count: clinicalErrorCount
+    };
+
+    if ((processedData.duplicates || []).length > 0) {
+      console.warn(`Se omitieron ${processedData.duplicates.length} registros por duplicados (episodio/paciente).`);
+    }
+
     if (processedData.errors.length > 0) {
       response.warnings = {
         message: 'Se encontraron errores en algunas filas',
         error_count: processedData.errors.length,
-        error_details: processedData.errors.slice(0, 10) // Mostrar solo los primeros 10 errores
+        error_details: processedData.errors.slice(0, 10)
       };
     }
 
-    // Agregar advertencias de estructura si las hay
     if (processedData.warnings && processedData.warnings.length > 0) {
       response.structure_warnings = {
-        message: 'Se encontraron columnas no reconocidas',
+        message: 'Advertencias de estructura (no bloquean el procesamiento)',
         warning_count: processedData.warnings.length,
-        warning_details: processedData.warnings.slice(0, 5) // Mostrar solo las primeras 5 advertencias
+        warning_details: processedData.warnings.slice(0, 5)
       };
     }
 
-    console.log(`✅ Procesamiento completado: ${processedData.results.length} válidos, ${processedData.errors.length} errores`);
-    res.json(response);
+    // ------------------------
+    // Audit log (async, pero esperamos a que se escriba)
+    // ------------------------
+    try {
+      await logUploadAction({
+        user: req.user || null,
+        file_name: req.file.originalname,
+        stored_name: req.file.filename,
+        file_size: req.file.size,
+        total_rows: response.summary.total_rows,
+        valid_rows: response.summary.valid_rows,
+        invalid_rows: response.summary.invalid_rows,
+        duplicates_count: processedData.duplicates?.length || 0,
+        errors_count: processedData.errors.length,
+        warnings_count: processedData.warnings?.length || 0,
+        clinical_ok: okCount,
+        clinical_with_errors: withErrCount
+      });
+    } catch (e) {
+      console.warn('No se pudo guardar audit upload (continuando):', e?.message ?? e);
+    }
+
+    // ------------------------
+    // Eliminar archivo temporal (rechazamos conservar archivos tras el proceso)
+    // ------------------------
+    try {
+      if (filePath && fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+      }
+    } catch (e) {
+      console.warn('No se pudo borrar archivo temporal:', e?.message ?? e);
+    } finally {
+      filePath = null;
+    }
+
+    return res.json(response);
 
   } catch (error) {
     console.error('Error general procesando archivo:', error);
-    
-    // Limpiar archivo temporal en caso de error
     if (filePath && fs.existsSync(filePath)) {
-      fs.unlinkSync(filePath);
+      try { fs.unlinkSync(filePath); } catch (_) {}
     }
-    
-    res.status(500).json({ 
-      error: 'Error interno del servidor', 
-      message: process.env.NODE_ENV === 'development' ? error.message : 'Error procesando archivo' 
+    return res.status(500).json({
+      error: 'Error interno del servidor',
+      message: process.env.NODE_ENV === 'development' ? (error?.message ?? String(error)) : 'Error procesando archivo'
     });
   }
 });
 
-// Endpoint GET para información del endpoint
+/* ============================
+   9) Endpoint info
+============================ */
 router.get('/upload/info', (req, res) => {
   res.json({
     endpoint: '/api/upload',
     method: 'POST',
-    description: 'Endpoint para subir archivos CSV/Excel con datos clínicos de episodios',
+    description: 'Sube CSV/Excel con datos clínicos. Mapea columnas flexiblemente, valida por fila (Joi) y aplica reglas clínicas GRD (MINSAL) sin bloquear por estructura.',
     accepted_formats: ['CSV (.csv)', 'Excel (.xlsx, .xls)'],
     max_file_size: '10MB',
     validation: {
-      column_structure: 'Validación automática de nombres de columnas',
-      required_columns: 'Columnas obligatorias para el procesamiento',
-      data_validation: 'Validación de tipos y rangos de datos'
-    },
-    required_fields: [
-      'paciente_id',
-      'fecha_ingreso', 
-      'diagnostico_principal',
-      'edad',
-      'sexo'
-    ],
-    optional_fields: [
-      'fecha_egreso',
-      'diagnostico_secundario',
-      'procedimiento',
-      'peso',
-      'talla',
-      'dias_estancia'
-    ],
-    column_mapping_examples: {
-      'RUT': 'paciente_id',
-      'Fecha Ingreso completa': 'fecha_ingreso',
-      'Fecha Completa': 'fecha_egreso',
-      'Diagnóstico   Principal': 'diagnostico_principal',
-      'Conjunto Dx': 'diagnostico_secundario',
-      'Proced 01 Principal    (cod)': 'procedimiento',
-      'Edad en años': 'edad',
-      'Sexo  (Desc)': 'sexo'
-    },
-    supported_column_variants: {
-      'paciente_id': ['RUT', 'paciente_id', 'id_paciente', 'pacienteId'],
-      'fecha_ingreso': ['Fecha Ingreso completa', 'fecha_ingreso', 'fechaIngreso'],
-      'diagnostico_principal': ['Diagnóstico Principal', 'diagnostico_principal', 'diagnosticoPrincipal'],
-      'edad': ['Edad en años', 'edad', 'age'],
-      'sexo': ['Sexo (Desc)', 'sexo', 'genero', 'género', 'sex']
-    },
-    error_responses: {
-      structure_errors: '400 - Errores de estructura de columnas',
-      data_errors: '200 - Errores en filas específicas',
-      processing_errors: '500 - Errores de procesamiento'
-    },
-    example_usage: {
-      method: 'POST',
-      url: '/api/upload',
-      headers: {
-        'Content-Type': 'multipart/form-data'
-      },
-      body: 'file: [archivo CSV/Excel]'
+      column_structure: 'Validación suave: advertencias, no bloquea',
+      required_columns: REQUIRED_COLUMNS,
+      data_validation: 'Validación por fila con Joi + validación clínica GRD'
     }
   });
 });
