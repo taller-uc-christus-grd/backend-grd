@@ -15,7 +15,8 @@ export async function listUsers(_req: Request, res: Response) {
         updatedAt: true
       }
     });
-    return res.json(users);
+    const usersLowercase = users.map(u => ({ ...u, rol: u.rol.toLowerCase() }));
+    return res.json(usersLowercase);
   } catch (error: any) {
     console.error('Error listando usuarios:', error);
     return res.status(500).json({ message: 'Error listando usuarios' });
@@ -60,7 +61,7 @@ export async function createUser(req: Request, res: Response) {
       }
     });
 
-    return res.status(201).json(usuario);
+    return res.status(201).json({ ...usuario, rol: usuario.rol.toLowerCase() });
   } catch (error: any) {
     console.error('Error creando usuario:', error);
     return res.status(500).json({ message: 'Error creando usuario' });
@@ -98,7 +99,7 @@ export async function updateUser(req: Request, res: Response) {
       }
     });
 
-    return res.json(usuario);
+    return res.json({ ...usuario, rol: usuario.rol.toLowerCase() });;
   } catch (error: any) {
     if (error.code === 'P2025') {
       return res.status(404).json({ message: 'Usuario no encontrado' });

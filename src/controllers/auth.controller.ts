@@ -47,7 +47,7 @@ export async function signup(req: Request, res: Response) {
         id: usuario.id,
         nombre: usuario.nombre,
         email: usuario.email,
-        rol: usuario.rol
+        rol: usuario.rol.toLowerCase(), // <-- CAMBIO AQUÍ
       }
     });
   } catch (error: any) {
@@ -95,7 +95,7 @@ export async function login(req: Request, res: Response) {
         id: usuario.id,
         nombre: usuario.nombre,
         email: usuario.email,
-        rol: usuario.rol
+        rol: usuario.rol.toLowerCase(), // <-- CAMBIO AQUÍ
       }
     });
   } catch (error: any) {
@@ -104,6 +104,27 @@ export async function login(req: Request, res: Response) {
   }
 }
 
-export function me(req: Request, res: Response) {
-  return res.json({ user: req.user });
+export async function me(req: Request, res: Response) {
+  // Simplemente obtenemos el usuario del token y lo devolvemos
+  // (El token ya tiene el rol correcto, pero si lo buscáramos en la DB, haríamos .toLowerCase())
+  const userPayload = req.user;
+  
+  // Para asegurar coherencia, buscamos al usuario
+  const usuario = await prisma.usuario.findUnique({
+    where: { id: parseInt(req.user!.id) },
+    select: { id: true, nombre: true, email: true, rol: true }
+  });
+
+  if (!usuario) {
+    return res.status(404).json({ message: 'Usuario no encontrado' });
+  }
+
+  return res.json({
+    user: {
+      id: usuario.id,
+      nombre: usuario.nombre,
+      email: usuario.email,
+      rol: usuario.rol.toLowerCase(), // <-- CAMBIO AQUÍ
+    },
+  });
 }
