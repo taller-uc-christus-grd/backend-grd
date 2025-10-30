@@ -8,6 +8,7 @@ import usersRoutes from './routes/users.routes';
 import exportRoutes from './routes/export.routes';
 import uploadRoutes from './routes/upload.routes';
 import episodiosRoutes from './routes/episodios.routes';
+import respaldosRoutes from './routes/respaldos.routes';
 import { errorHandler } from './middlewares/error';
 
 dotenv.config();
@@ -51,6 +52,7 @@ app.use('/usuarios', usersRoutes);
 app.use('/api', exportRoutes);
 app.use('/api', uploadRoutes);
 app.use('/api', episodiosRoutes);
+app.use('/api', respaldosRoutes);
 
 // 404 handler
 app.use((req, res) => {
