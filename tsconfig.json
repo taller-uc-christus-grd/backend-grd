@@ -16,6 +16,7 @@
     "allowSyntheticDefaultImports": true,
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true,
+    "allowJs": true,
 
     /* === Mapas y compilación === */
     "sourceMap": true,
