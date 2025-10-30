@@ -1,95 +1,97 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
 //
 //  ENTIDADES PRINCIPALES
 //
 
 model Usuario {
-  id          Int          @id @default(autoincrement())
-  nombre      String
-  email       String        @unique
+  id           Int      @id @default(autoincrement())
+  nombre       String
+  email        String   @unique
   passwordHash String
-  rol         Role          @default(CODIFICADOR)
-  activo      Boolean       @default(true)
-  createdAt   DateTime      @default(now())
-  updatedAt   DateTime      @updatedAt
+  rol          String   @db.VarChar(50)
+  activo       Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
   // Relaciones
-  respaldos   Respaldo[]
-  logs        LogSistema[]
-}
-
-enum Role {
-  ADMIN
-  CODIFICADOR
-  FINANZAS
-  GESTION
+  respaldos Respaldo[]   @relation("UsuarioRespaldo")
+  logs      LogSistema[] @relation("UsuarioLog")
 }
 
 model Paciente {
-  id         Int         @id @default(autoincrement())
-  rut        String?     @unique
-  nombre     String?
-  edad       Int?
-  sexo       String?     @db.VarChar(10)
-  episodios  Episodio[]
-  createdAt  DateTime    @default(now())
-  updatedAt  DateTime    @updatedAt
+  id        Int        @id @default(autoincrement())
+  rut       String?    @unique
+  nombre    String?
+  edad      Int?
+  sexo      String?    @db.VarChar(10)
+  episodios Episodio[]
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
 }
 
 model Grd {
-  id              Int          @id @default(autoincrement())
-  codigo          String       @unique
+  id              Int        @id @default(autoincrement())
+  codigo          String     @unique
   descripcion     String?
-  peso            Decimal?     @db.Decimal(10,4)
-  precioBaseTramo Decimal?     @db.Decimal(14,2)
+  peso            Decimal?   @db.Decimal(10, 4)
+  precioBaseTramo Decimal?   @db.Decimal(14, 2)
   puntoCorteInf   Decimal?
   puntoCorteSup   Decimal?
   episodios       Episodio[]
-  createdAt       DateTime     @default(now())
+  createdAt       DateTime   @default(now())
 }
 
 model Episodio {
-  id                    Int           @id @default(autoincrement())
-  centro                String?
-  numeroFolio           String?       @db.VarChar(100)
-  episodioCmdb          String?       @db.VarChar(100)
-  idDerivacion          String?       @db.VarChar(100)
-  tipoEpisodio          String?
-  fechaIngreso          DateTime?
-  fechaAlta             DateTime?
-  servicioAlta          String?
-  estadoRn              String?
-  atSn                  Boolean?
-  atDetalle             String?
-  montoAt               Decimal?      @db.Decimal(14,2)
-  tipoAlta              String?
-  pesoGrd               Decimal?      @db.Decimal(10,4)
-  montoRn               Decimal?      @db.Decimal(14,2)
-  diasDemoraRescate     Int?
-  pagoDemoraRescate     Decimal?      @db.Decimal(14,2)
-  pagoOutlierSuperior   Decimal?      @db.Decimal(14,2)
-  documentacion         Json?
-  inlierOutlier         String?
-  grupoEnNorma          Boolean?
-  diasEstada            Int?
-  precioBaseTramo       Decimal?      @db.Decimal(14,2)
-  valorGrd              Decimal?      @db.Decimal(14,2)
-  montoFinal            Decimal?      @db.Decimal(16,2)
-  facturacionTotal      Decimal?      @db.Decimal(16,2)
-  especialidad          String?
-  anio                  Int?
-  mes                   Int?
+  id                  Int       @id @default(autoincrement())
+  centro              String?
+  numeroFolio         String?   @db.VarChar(100)
+  episodioCmdb        String?   @db.VarChar(100)
+  idDerivacion        String?   @db.VarChar(100)
+  tipoEpisodio        String?
+  fechaIngreso        DateTime?
+  fechaAlta           DateTime?
+  servicioAlta        String?
+  estadoRn            String?
+  atSn                Boolean?
+  atDetalle           String?
+  montoAt             Decimal?  @db.Decimal(14, 2)
+  tipoAlta            String?
+  pesoGrd             Decimal?  @db.Decimal(10, 4)
+  montoRn             Decimal?  @db.Decimal(14, 2)
+  diasDemoraRescate   Int?
+  pagoDemoraRescate   Decimal?  @db.Decimal(14, 2)
+  pagoOutlierSuperior Decimal?  @db.Decimal(14, 2)
+  documentacion       Json?
+  inlierOutlier       String?
+  grupoEnNorma        Boolean?
+  diasEstada          Int?
+  precioBaseTramo     Decimal?  @db.Decimal(14, 2)
+  valorGrd            Decimal?  @db.Decimal(14, 2)
+  montoFinal          Decimal?  @db.Decimal(16, 2)
+  facturacionTotal    Decimal?  @db.Decimal(16, 2)
+  especialidad        String?
+  anio                Int?
+  mes                 Int?
 
-  pacienteId            Int? 
-  paciente              Paciente?     @relation(fields: [pacienteId], references: [id])
-  
-  grdId                 Int?
-  grd                   Grd?          @relation(fields: [grdId], references: [id])
+  pacienteId Int?
+  paciente   Paciente? @relation(fields: [pacienteId], references: [id])
 
-  diagnosticos          Diagnostico[]
-  respaldos             Respaldo[]
-  
-  createdAt             DateTime      @default(now())
-  updatedAt             DateTime      @updatedAt
+  grdId Int?
+  grd   Grd? @relation(fields: [grdId], references: [id])
+
+  diagnosticos Diagnostico[]
+  respaldos    Respaldo[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([numeroFolio])
   @@index([episodioCmdb])
@@ -98,43 +100,41 @@ model Episodio {
 }
 
 model Diagnostico {
-  id          Int        @id @default(autoincrement())
-  codigo      String?    @db.VarChar(50)
+  id          Int       @id @default(autoincrement())
+  codigo      String?   @db.VarChar(50)
   descripcion String?
-  esPrincipal Boolean?   @default(false)
+  esPrincipal Boolean?  @default(false)
   episodioId  Int?
-  episodio    Episodio?  @relation(fields: [episodioId], references: [id])
-  createdAt   DateTime   @default(now())
+  episodio    Episodio? @relation(fields: [episodioId], references: [id])
+  createdAt   DateTime  @default(now())
 }
 
 model Respaldo {
-  id           Int        @id @default(autoincrement())
-  filename     String?
-  storagePath  String?
-  fileType     String?
-  sizeBytes    Int?
-  uploadedAt   DateTime   @default(now())
+  id          Int      @id @default(autoincrement())
+  filename    String?
+  storagePath String?
+  fileType    String?
+  sizeBytes   Int?
+  uploadedAt  DateTime @default(now())
 
-  episodioId   Int?
-  episodio     Episodio?  @relation(fields: [episodioId], references: [id])
+  episodioId Int?
+  episodio   Episodio? @relation(fields: [episodioId], references: [id])
 
-  uploadedBy   Int?
-  usuario      Usuario?   @relation(fields: [uploadedBy], references: [id])
+  uploadedBy Int?
+  usuario    Usuario? @relation("UsuarioRespaldo", fields: [uploadedBy], references: [id])
 }
 
 model LogSistema {
-  id        Int       @id @default(autoincrement())
+  id        Int      @id @default(autoincrement())
   endpoint  String?
   action    String?
   level     String?
   message   String?
   metadata  Json?
-  createdAt DateTime  @default(now())
+  createdAt DateTime @default(now())
 
-  userId    Int?
-  usuario   Usuario?  @relation(fields: [userId], references: [id])
+  userId  Int?
+  usuario Usuario? @relation("UsuarioLog", fields: [userId], references: [id])
 
   @@index([userId])
 }
-
-
