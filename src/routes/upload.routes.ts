@@ -53,19 +53,28 @@ const errorRecords: any[] = [];
 const validRecords: RawRow[] = [];
 
 // Funciones Helper de limpieza
-function isEmpty(value?: string | null): boolean {
-  return !value || value.trim() === '' || value.toLowerCase() === 'null';
+function isEmpty(value?: any): boolean {
+  if (value === undefined || value === null) return true;
+  const v = typeof value === 'string' ? value.trim() : String(value).trim();
+  return v === '' || v.toLowerCase() === 'null';
 }
-function isNumeric(value?: string | null): boolean {
-  return value !== undefined && value !== null && !isNaN(Number(value));
+
+function isNumeric(value?: any): boolean {
+  if (value === undefined || value === null) return false;
+  return !isNaN(Number(value));
 }
-function isValidDate(value?: string | null): boolean {
-  // Esta validación es simple, puede mejorarse para formatos estrictos
-  return value ? !isNaN(new Date(value).getTime()) : false;
+
+function isValidDate(value?: any): boolean {
+  if (value === undefined || value === null) return false;
+  const d = value instanceof Date ? value : new Date(value);
+  return !isNaN(d.getTime());
 }
-function cleanString(value?: string | null): string | null {
-  if (!value) return null;
-  return value.replace(/\s+/g, ' ').trim();
+
+function cleanString(value?: any): string | null {
+  if (value === undefined || value === null) return null;
+  const s = typeof value === 'string' ? value : String(value);
+  const out = s.replace(/\s+/g, ' ').trim();
+  return out === '' ? null : out;
 }
 
 /**
