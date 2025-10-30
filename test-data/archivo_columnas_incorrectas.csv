@@ -1,4 +1,0 @@
-ID,Date,Diagnosis,Age,Gender,Extra_Column
-P001,2024-01-01,Neumonía,65,M,Extra_Data
-P002,2024-01-02,Infarto agudo,58,F,Extra_Data
-P003,2024-01-03,Apendicitis aguda,32,M,Extra_Data

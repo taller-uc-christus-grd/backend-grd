@@ -1,4 +1,0 @@
-paciente_id,fecha_ingreso,diagnostico_principal,edad,sexo
-P001,2024-01-01,Neumonía,65,M
-P002,2024-01-02,Infarto agudo,58,F
-P003,2024-01-03,Apendicitis aguda,32,M
