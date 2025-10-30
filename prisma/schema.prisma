@@ -1,12 +1,3 @@
-generator client {
-  provider = "prisma-client-js"
-}
-
-datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
-}
-
 //
 //  ENTIDADES PRINCIPALES
 //
@@ -16,7 +7,7 @@ model Usuario {
   nombre      String
   email       String        @unique
   passwordHash String
-  rol         String        @db.VarChar(50)
+  rol         Role          @default(CODIFICADOR)
   activo      Boolean       @default(true)
   createdAt   DateTime      @default(now())
   updatedAt   DateTime      @updatedAt
@@ -24,6 +15,13 @@ model Usuario {
   // Relaciones
   respaldos   Respaldo[]
   logs        LogSistema[]
+}
+
+enum Role {
+  ADMIN
+  CODIFICADOR
+  FINANZAS
+  GESTION
 }
 
 model Paciente {
@@ -138,3 +136,5 @@ model LogSistema {
 
   @@index([userId])
 }
+
+
