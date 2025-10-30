@@ -3,7 +3,7 @@ import multer from 'multer';
 import * as path from 'path';
 import * as fs from 'fs';
 import csv from 'csv-parser';
-import *S XLSX from 'xlsx';
+import * as XLSX from 'xlsx';
 import { prisma, Prisma } from '../db/client'; // ¡Importante! Conecta con la DB
 import { requireAuth } from '../middlewares/auth'; // Proteger la ruta
 
@@ -59,6 +59,7 @@ function isNumeric(value?: string | null): boolean {
   return value !== undefined && value !== null && !isNaN(Number(value));
 }
 function isValidDate(value?: string | null): boolean {
+  // Esta validación es simple, puede mejorarse para formatos estrictos
   return value ? !isNaN(new Date(value).getTime()) : false;
 }
 function cleanString(value?: string | null): string | null {
@@ -66,9 +67,10 @@ function cleanString(value?: string | null): string | null {
   return value.replace(/\s+/g, ' ').trim();
 }
 
-// Valida una fila (adaptado de tu script)
-// NOTA: La validación de duplicados en la DB es costosa para un request.
-// La comentamos, pero la de "campos faltantes" es clave.
+/**
+ * Valida una fila ANTES de procesarla.
+ * ¡MODIFICADO con la validación de GRD!
+ */
 async function validateRow(row: RawRow, index: number): Promise<boolean> {
   const requiredFields = ['Episodio CMBD', 'Hospital (Descripción)', 'RUT', 'IR GRD (Código)'];
   const missing = requiredFields.filter((f) => isEmpty(row[f]));
@@ -82,7 +84,7 @@ async function validateRow(row: RawRow, index: number): Promise<boolean> {
     return false;
   }
 
-  // Validación de duplicados (Costosa para un request, pero la mantenemos de tu script)
+  // Validación de duplicados
   const existing = await prisma.episodio.findFirst({
     where: { episodioCmdb: row['Episodio CMBD'] },
   });
@@ -93,6 +95,27 @@ async function validateRow(row: RawRow, index: number): Promise<boolean> {
       registro: row,
     });
     return false;
+  }
+  
+  // ¡NUEVO! Validar que el GRD exista en nuestra tabla de Normas
+  const grdCode = cleanString(row['IR GRD (Código)']);
+  if (grdCode) {
+    const grdRule = await prisma.grd.findUnique({ where: { codigo: grdCode }});
+    if (!grdRule) {
+      errorRecords.push({
+        fila: index,
+        error: `Regla GRD no encontrada en la Norma Minsal: ${grdCode}. Cargue la norma primero.`,
+        registro: row,
+      });
+      return false;
+    }
+  } else {
+     errorRecords.push({
+        fila: index,
+        error: `El campo 'IR GRD (Código)' está vacío.`,
+        registro: row,
+      });
+      return false;
   }
 
   if (!isValidDate(row['Fecha Ingreso completa']) || !isValidDate(row['Fecha Completa'])) {
@@ -107,39 +130,42 @@ async function validateRow(row: RawRow, index: number): Promise<boolean> {
   return true;
 }
 
-// Procesa y guarda una fila en la DB (adaptado de tu script)
+/**
+ * Procesa y guarda una fila en la DB (¡MODIFICADO!)
+ * Ya no crea GRDs, solo los vincula.
+ * Se corrige el error de Prisma.Decimal.
+ */
 async function processRow(row: RawRow) {
   const rut = cleanString(row['RUT']);
   const nombre = cleanString(row['Nombre']);
+  const grdCode = cleanString(row['IR GRD (Código)'])!; // Sabemos que no es nulo por validateRow
 
   const paciente = await prisma.paciente.upsert({
     where: { rut: rut || 'SIN-RUT' }, // Usar un placeholder si el RUT es nulo
     update: {
       nombre,
-      sexo: cleanString(row['Sexo  (Desc)']),
+      sexo: cleanString(row['Sexo  (Desc)']), // Cuidado con el doble espacio
       edad: isNumeric(row['Edad en años']) ? Number(row['Edad en años']) : null,
     },
     create: {
       rut: rut || 'SIN-RUT',
       nombre,
-      sexo: cleanString(row['Sexo  (Desc)']),
+      sexo: cleanString(row['Sexo  (Desc)']), // Cuidado con el doble espacio
       edad: isNumeric(row['Edad en años']) ? Number(row['Edad en años']) : null,
     },
   });
 
-  const grd = await prisma.grd.upsert({
-    where: { codigo: row['IR GRD (Código)'] },
-    update: {
-      descripcion: row['IR GRD'],
-      peso: isNumeric(row['Peso GRD Medio (Todos)']) ? new Prisma.Decimal(row['Peso GRD Medio (Todos)']) : null,
-    },
-    create: {
-      codigo: row['IR GRD (Código)'],
-      descripcion: row['IR GRD'],
-      peso: isNumeric(row['Peso GRD Medio (Todos)']) ? new Prisma.Decimal(row['Peso GRD Medio (Todos)']) : null,
-    },
-  });
+  // ¡MODIFICADO! Ya no usamos 'upsert' para GRD. Solo buscamos el ID de la regla.
+  const grdRule = await prisma.grd.findUnique({ where: { codigo: grdCode }});
+  
+  if (!grdRule) {
+    // Esto no debería pasar gracias a validateRow, pero es una buena defensa
+    throw new Error(`Regla GRD ${grdCode} no encontrada durante el procesamiento.`);
+  }
 
+  // ¡MODIFICADO! Aquí guardamos los datos *crudos* del CSV.
+  // El cálculo se hará en la exportación.
+  // ¡CORREGIDO! Se elimina 'new Prisma.Decimal()'
   await prisma.episodio.create({
     data: {
       centro: cleanString(row['Hospital (Descripción)']),
@@ -149,16 +175,21 @@ async function processRow(row: RawRow) {
       fechaIngreso: new Date(row['Fecha Ingreso completa']),
       fechaAlta: new Date(row['Fecha Completa']),
       servicioAlta: cleanString(row['Servicio Egreso (Descripción)']),
+      
+      // Guardamos los montos y pesos crudos del archivo de entrada
+      // (Usamos parseFloat para manejar decimales)
       montoRn: isNumeric(row['Facturación Total del episodio'])
-        ? new Prisma.Decimal(row['Facturación Total del episodio'])
-        : new Prisma.Decimal(0),
+        ? parseFloat(row['Facturación Total del episodio'])
+        : 0,
       pesoGrd: isNumeric(row['Peso GRD Medio (Todos)'])
-        ? new Prisma.Decimal(row['Peso GRD Medio (Todos)'])
-        : new Prisma.Decimal(0),
+        ? parseFloat(row['Peso GRD Medio (Todos)'])
+        : 0,
+        
       inlierOutlier: cleanString(row['IR Alta Inlier / Outlier']),
+      
+      // Vinculamos las entidades
       pacienteId: paciente.id,
-      grdId: grd.id,
-      // ... (agregar más campos si es necesario)
+      grdId: grdRule.id, // <-- Vinculado, no creado
     },
   });
 }
@@ -201,7 +232,8 @@ router.post('/upload', requireAuth, upload.single('file'), async (req: Request, 
     let index = 0;
     for (const row of data) {
       index++;
-      const isValid = await validateRow(row, index); // Llama a la validación de BBDD
+      // ¡validateRow ahora es async y consulta la DB!
+      const isValid = await validateRow(row, index); 
       if (isValid) {
         validRecords.push(row);
       }
