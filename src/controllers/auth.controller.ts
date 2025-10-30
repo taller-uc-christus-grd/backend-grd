@@ -3,8 +3,7 @@ import bcrypt from 'bcryptjs';
 import { signToken } from '../utils/jwt';
 import { prisma } from '../db/client';
 
-const ROLES = ['ADMIN', 'CODIFICADOR', 'FINANZAS', 'GESTION'] as const;
-type Rol = typeof ROLES[number];
+// Las constantes 'ROLES' y 'Rol' se eliminaron ya que no se usaban.
 
 export async function signup(req: Request, res: Response) {
   try {
@@ -30,7 +29,7 @@ export async function signup(req: Request, res: Response) {
         nombre,
         email,
         passwordHash,
-        rol: rol || 'CODIFICADOR'
+        rol: rol || 'CODIFICADOR' // El rol es un string, coherente con el schema
       },
       select: {
         id: true,
@@ -101,7 +100,7 @@ export async function login(req: Request, res: Response) {
     });
   } catch (error: any) {
     console.error('Error en login:', error);
-    return res.status(500).json({ message: 'Error en login' });
+    return res.status(5S00).json({ message: 'Error en login' });
   }
 }
 
