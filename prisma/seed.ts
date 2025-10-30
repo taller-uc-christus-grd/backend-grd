@@ -1,11 +1,12 @@
-import { PrismaClient, Role } from '@prisma/client';
+import { PrismaClient } from '@prisma/client'; // 1. Quita "Role" de aquí
 import { faker } from '@faker-js/faker';
 import bcrypt from 'bcryptjs';
 
 const prisma = new PrismaClient();
 
 // ---- 1. seed de usuarios base ----
-async function upsertUser(name: string, email: string, role: Role) {
+// 2. se cambia el tipo de "role" de Role a string
+async function upsertUser(name: string, email: string, role: string) {
   const passwordHash = await bcrypt.hash('cualquier_contraseña', 10);
 
   await prisma.user.upsert({
@@ -23,10 +24,11 @@ async function upsertUser(name: string, email: string, role: Role) {
 }
 
 async function seedUsers() {
-  await upsertUser('Admin', 'admin@ucchristus.cl', Role.ADMIN);
-  await upsertUser('Codificador GRD', 'codificador@ucchristus.cl', Role.CODIFICADOR);
-  await upsertUser('Finanzas', 'finanzas@ucchristus.cl', Role.FINANZAS);
-  await upsertUser('Gestión', 'gestion@ucchristus.cl', Role.GESTION);
+  // 3. Pasa los roles como strings
+  await upsertUser('Admin', 'admin@ucchristus.cl', 'ADMIN');
+  await upsertUser('Codificador GRD', 'codificador@ucchristus.cl', 'CODIFICADOR');
+  await upsertUser('Finanzas', 'finanzas@ucchristus.cl', 'FINANZAS');
+  await upsertUser('Gestión', 'gestion@ucchristus.cl', 'GESTION');
 }
 
 // ---- 2. seed de datos clínico-administrativos ----
