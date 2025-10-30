@@ -1,22 +1,27 @@
-import { PrismaClient } from '@prisma/client'; // 1. Quita "Role" de aquí
+import dotenv from 'dotenv';
+dotenv.config(); // <-- IMPORTANTE: Cargar variables de .env
+
+import { PrismaClient } from '@prisma/client';
 import { faker } from '@faker-js/faker';
 import bcrypt from 'bcryptjs';
 
 const prisma = new PrismaClient();
 
 // ---- 1. seed de usuarios base ----
-// 2. se cambia el tipo de "role" de Role a string
+// (Modificado para usar strings de ROL, como lo corregimos antes)
 async function upsertUser(name: string, email: string, role: string) {
   const passwordHash = await bcrypt.hash('cualquier_contraseña', 10);
 
-  await prisma.user.upsert({
+  // ¡¡¡CORRECCIÓN AQUÍ!!! -> de 'user' a 'usuario'
+  await prisma.usuario.upsert({
     where: { email },
-    update: { name, role },
+    update: { nombre: name, rol: role },
     create: {
-      name,
+      nombre: name,
       email,
-      role,
-      password: passwordHash,
+      rol: role,
+      passwordHash,
+      activo: true,
     },
   });
 
@@ -24,7 +29,6 @@ async function upsertUser(name: string, email: string, role: string) {
 }
 
 async function seedUsers() {
-  // 3. Pasa los roles como strings
   await upsertUser('Admin', 'admin@ucchristus.cl', 'ADMIN');
   await upsertUser('Codificador GRD', 'codificador@ucchristus.cl', 'CODIFICADOR');
   await upsertUser('Finanzas', 'finanzas@ucchristus.cl', 'FINANZAS');
@@ -34,16 +38,17 @@ async function seedUsers() {
 // ---- 2. seed de datos clínico-administrativos ----
 async function seedClinico() {
   // nos aseguramos de que exista al menos un GRD base
+  // (Asumimos que 'loadNorma.ts' ya se ejecutó, pero creamos uno por si acaso)
   const grd = await prisma.grd.upsert({
     where: { codigo: '41023' },
     update: {},
     create: {
       codigo: '41023',
       descripcion: 'PH VENTILACIÓN MECÁNICA PROLONGADA SIN TRAQUEOSTOMÍA W/MCC',
-      // si tu schema usa Decimal de Prisma en JS puro:
-      // peso: new Prisma.Decimal("5.8207"),
       peso: 5.8207,
       precioBaseTramo: 120000,
+      puntoCorteInf: 0,
+      puntoCorteSup: 0,
     },
   });
 
@@ -84,7 +89,7 @@ async function seedClinico() {
 // ---- 3. main ----
 async function main() {
   await seedUsers();
-  await seedClinico();
+  // await seedClinico(); // Opcional: Comenta esto si no quieres datos de episodios falsos
 }
 
 main()

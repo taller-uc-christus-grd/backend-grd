@@ -1,8 +1,9 @@
 import { Router, Request, Response } from 'express';
 import * as XLSX from 'xlsx';
 import { requireAuth } from '../middlewares/auth';
-import { prisma, Prisma } from '../db/client';
-import { uploadToCloudinary } from '../config/cloudinary'; // <-- 1. Importar Cloudinary
+import { prisma } from '../db/client';
+import type { Prisma } from '@prisma/client';
+import { uploadToCloudinary } from '../config/cloudinary';
 
 const router = Router();
 
@@ -14,17 +15,16 @@ const toExcelDate = (d: string | Date | null | undefined): string => {
   return dt.toISOString().slice(0, 10);
 };
 
-const getDiasEstada = (fechaIngreso: Date, fechaAlta: Date): number => {
+const getDiasEstada = (fechaIngreso: Date | null | undefined, fechaAlta: Date | null | undefined): number => {
   if (!fechaIngreso || !fechaAlta) return 0;
   const diff = Math.round((fechaAlta.getTime() - fechaIngreso.getTime()) / 86400000);
   return diff >= 0 ? diff : 0;
 };
 
-// --- Lógica de Cálculo (Basada en image_da1fad.png) ---
+// --- Lógica de Cálculo (basado en tu esquema) ---
 function calcularValores(episodio: any): any {
   const { grd } = episodio;
   if (!grd) {
-    // Si no hay GRD vinculado, devolver valores por defecto
     return {
       diasEstada: getDiasEstada(episodio.fechaIngreso, episodio.fechaAlta),
       inlierOutlier: 'SIN GRD',
@@ -35,9 +35,8 @@ function calcularValores(episodio: any): any {
   }
 
   const diasEstada = getDiasEstada(episodio.fechaIngreso, episodio.fechaAlta);
-  const { peso, precioBaseTramo, puntoCorteInf, puntoCorteSup } = grd;
-  
-  // 1. Calcular Inlier/Outlier
+  const { peso = 0, precioBaseTramo = 0, puntoCorteInf = 0, puntoCorteSup = 0 } = grd as any;
+
   let inlierOutlier = 'Inlier';
   if (diasEstada > (puntoCorteSup as number)) {
     inlierOutlier = 'Outlier Superior';
@@ -45,15 +44,12 @@ function calcularValores(episodio: any): any {
     inlierOutlier = 'Outlier Inferior';
   }
 
-  // 2. Calcular Valor GRD (Peso * Precio Base)
   const valorGrd = (peso as number) * (precioBaseTramo as number);
-
-  // 3. Calcular Monto Final (Simplificado, basado en tu schema)
-  // (Valor GRD + Monto AT + Recargo Rescate + Pago Outlier)
-  const montoFinal = valorGrd + 
-                     (episodio.montoAt as number || 0) + 
-                     (episodio.pagoDemoraRescate as number || 0) + 
-                     (episodio.pagoOutlierSuperior as number || 0);
+  const montoFinal =
+    (valorGrd || 0) +
+    (episodio.montoAt as number || 0) +
+    (episodio.pagoDemoraRescate as number || 0) +
+    (episodio.pagoOutlierSuperior as number || 0);
 
   return {
     diasEstada,
@@ -64,34 +60,34 @@ function calcularValores(episodio: any): any {
   };
 }
 
-
-// --- Endpoint de Exportación (MODIFICADO) ---
+// --- Endpoint de Exportación ---
 router.get('/export', requireAuth, async (req: Request, res: Response) => {
   try {
     const { desde, hasta, centro } = req.query;
-    console.log(`📤 Iniciando exportación con filtros:`, { desde, hasta, centro });
+    console.log('📤 Iniciando exportación con filtros:', { desde, hasta, centro });
 
-    // 1. Buscar datos crudos de la DB
     const where: Prisma.EpisodioWhereInput = {};
-    if (desde) where.fechaIngreso = { ...where.fechaIngreso, gte: new Date(desde as string) };
-    if (hasta) where.fechaIngreso = { ...where.fechaIngreso, lte: new Date(hasta as string) };
+    if (desde || hasta) {
+      const fechaFilter: Prisma.DateTimeFilter = {};
+      if (desde) fechaFilter.gte = new Date(desde as string);
+      if (hasta) fechaFilter.lte = new Date(hasta as string);
+      where.fechaIngreso = fechaFilter;
+    }
     if (centro) where.centro = { contains: centro as string, mode: 'insensitive' };
 
     const episodiosDB = await prisma.episodio.findMany({
       where,
       include: {
         paciente: true,
-        grd: true, // ¡Crucial! Trae las reglas (peso, precio, cortes)
+        grd: true,
       },
       orderBy: { fechaIngreso: 'asc' },
     });
     console.log(`📊 Datos encontrados: ${episodiosDB.length} registros`);
 
-    // 2. Aplicar Cálculos
-    const rows = episodiosDB.map(e => {
+    const rows = episodiosDB.map((e) => {
       const calculos = calcularValores(e);
       return {
-        // Datos del episodio
         centro: e.centro,
         folio: e.numeroFolio,
         episodio: e.episodioCmdb,
@@ -107,28 +103,31 @@ router.get('/export', requireAuth, async (req: Request, res: Response) => {
         demora_rescate_dias: e.diasDemoraRescate,
         pago_demora_rescate: e.pagoDemoraRescate,
         pago_outlier_sup: e.pagoOutlierSuperior,
-        // Datos del paciente
         rut: e.paciente?.rut,
         nombre: e.paciente?.nombre,
-        // Datos del GRD
         ir_grd: e.grd?.codigo,
         peso: e.grd?.peso,
-        // Datos Calculados
         ...calculos,
-        VALIDADO: 'SÍ', // Marcar como validado (lógica de ejemplo)
-        grupo_norma_sn: 'S', // Lógica de ejemplo
-        doc_necesaria: '', // Lógica de ejemplo
+        VALIDADO: 'SÍ',
+        grupo_norma_sn: 'S',
+        doc_necesaria: '',
       };
     });
 
-    // 3. Armar el Excel (como antes)
-    const headers = [/* ... (headers de la imagen 'image_da1fad.png') ... */];
-    // (Asegúrate que tu array de 'headers' coincida con la imagen)
+    // Cabeceras en el orden del sheetData
+    const headers = [
+      'Tipo dato', 'VALIDADO', 'Centro', 'N° Folio', 'Episodio', 'Rut Paciente', 'Nombre Paciente',
+      'TIPO EPISODIO', 'Fecha de ingreso', 'Fecha Alta', 'Servicios de alta', 'ESTADO RN', 'AT (S/N)',
+      'AT detalle', 'Monto AT', 'Tipo de Alta', 'IR - GRD', 'PESO', 'MONTO RN', 'Dias de demora rescate desde Hospital',
+      'Pago demora rescate', 'Pago por outlier superior', 'DOCUMENTACIÓN NECESARIA', 'Inlier/outlier',
+      'Grupo dentro de norma S/N', 'Dias de Estada', 'Precio Base por tramo correspondiente', 'Valor GRD', 'Monto Final'
+    ];
+
     const sheetData: any[][] = [headers];
 
     rows.forEach((row) => {
       sheetData.push([
-        '',
+        'manual', // Tipo dato ejemplo
         row.VALIDADO || '',
         row.centro || '',
         row.folio || '',
@@ -146,28 +145,51 @@ router.get('/export', requireAuth, async (req: Request, res: Response) => {
         row.tipo_alta || '',
         row.ir_grd || '',
         Number(row.peso) || 0,
-        0, // MONTO RN (Tu schema lo tiene en episodio, ajústalo si es necesario)
-        Number(row.demora_rescate_dias) || '',
+        0,
+        Number(row.demora_rescate_dias) || 0,
         Number(row.pago_demora_rescate) || 0,
         Number(row.pago_outlier_sup) || 0,
         row.doc_necesaria || '',
         row.inlierOutlier || '',
         row.grupo_norma_sn || '',
-        Number(row.diasEstada) || '',
+        Number(row.diasEstada) || 0,
         Number(row.precioBaseTramo) || 0,
         Number(row.valorGrd) || 0,
-        Number(row.montoFinal) || 0
+        Number(row.montoFinal) || 0,
       ]);
     });
 
     const wb = XLSX.utils.book_new();
     const ws = XLSX.utils.aoa_to_sheet(sheetData);
     XLSX.utils.book_append_sheet(wb, ws, 'FONASA');
-    
-    // 4. Generar Buffer
-    const buf = XLSX
 
-// Ruta de Info (la mantenemos)
+    // Generar Buffer
+    const buf = XLSX.write(wb, { bookType: 'xlsx', type: 'buffer' });
+
+    // Opción: subir a Cloudinary si se indica ?upload=true
+    if ((req.query as any).upload === 'true' && typeof uploadToCloudinary === 'function') {
+      try {
+        const filename = `grd_export_${new Date().toISOString().slice(0, 10)}.xlsx`;
+        const result = await uploadToCloudinary(buf, { folder: 'grd_exports', public_id: filename, resource_type: 'raw' });
+        return res.json({ ok: true, uploaded: true, result });
+      } catch (err: any) {
+        console.error('Error subiendo a Cloudinary:', err);
+        return res.status(500).json({ message: 'Error subiendo a Cloudinary' });
+      }
+    }
+
+    // Enviar archivo como descarga
+    const fileName = `grd_export_${new Date().toISOString().slice(0, 10)}.xlsx`;
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+    return res.send(buf);
+  } catch (err: any) {
+    console.error('Error en export route:', err);
+    return res.status(500).json({ message: 'Error generando export' });
+  }
+});
+
+// Ruta de Info
 router.get('/export/info', (_req: Request, res: Response) => {
   res.json({
     endpoint: '/api/export',
@@ -178,8 +200,7 @@ router.get('/export/info', (_req: Request, res: Response) => {
       desde: { type: 'string', format: 'YYYY-MM-DD' },
       hasta: { type: 'string', format: 'YYYY-MM-DD' },
       centro: { type: 'string' },
-      // validado: { type: 'string', values: ['SÍ', 'NO'] } // Comentado ya que no está en el schema
-    }
+    },
   });
 });
 

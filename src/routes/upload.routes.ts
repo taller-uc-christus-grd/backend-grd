@@ -4,7 +4,8 @@ import * as path from 'path';
 import * as fs from 'fs';
 import csv from 'csv-parser';
 import * as XLSX from 'xlsx';
-import { prisma, Prisma } from '../db/client'; // ¡Importante! Conecta con la DB
+import { prisma } from '../db/client';
+import type { Prisma } from '@prisma/client';
 import { requireAuth } from '../middlewares/auth'; // Proteger la ruta
 
 const router = Router();
