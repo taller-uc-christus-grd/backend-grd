@@ -7,6 +7,7 @@ import csv from 'csv-parser';
 import * as XLSX from 'xlsx';
 import { requireAuth } from '../middlewares/auth';
 import { prisma } from '../db/client'; // ¡Importante! Conecta con la DB
+import { Readable } from 'stream';
 
 const router = Router();
 
@@ -359,15 +360,16 @@ router.post('/episodes/import', requireAuth, upload.single('file'), async (req: 
 
     // Parsear archivo
     if (ext === '.csv') {
+      const stream = Readable.from(fileBuffer.toString());
       await new Promise<void>((resolve, reject) => {
-        fs.createReadStream(fileBuffer)
+        stream
           .pipe(csv())
           .on('data', (row) => data.push(row as RawRow))
           .on('end', resolve)
           .on('error', reject);
       });
     } else {
-      const workbook = XLSX.readFile(fileBuffer);
+      const workbook = XLSX.read(fileBuffer, { type: 'buffer' });
       const sheetName = workbook.SheetNames[0];
       const worksheet = workbook.Sheets[sheetName];
       data = XLSX.utils.sheet_to_json(worksheet) as RawRow[];
