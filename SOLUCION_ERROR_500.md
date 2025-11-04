@@ -71,12 +71,9 @@ NODE_ENV=production
 **Configuración en Railway:**
 
 1. Ve a tu proyecto en Railway → **Settings** → **Deploy**
-2. Configura el **Build Command**:
-   ```
-   npm run build
-   ```
-   
-   Este comando generará Prisma Client y compilará TypeScript.
+2. **NO configures el Build Command** (déjalo vacío o elimínalo si está configurado)
+   - Railway ejecutará automáticamente `npm install`, que ejecutará el script `postinstall`
+   - El script `postinstall` generará Prisma Client y compilará TypeScript automáticamente
 
 3. Configura el **Start Command**:
    ```
@@ -145,7 +142,7 @@ El código ahora incluye:
 
 1. ✅ **Mejor logging:** El controlador de login ahora registra información detallada sobre los errores
 2. ✅ **Health check mejorado:** El endpoint `/health` verifica la conexión a la base de datos
-3. ✅ **Script postinstall:** Prisma Client se genera automáticamente después de `npm install`
+3. ✅ **Script postinstall:** Se ejecuta automáticamente después de `npm install` y genera Prisma Client y compila TypeScript
 4. ✅ **Script start:prod:** Ejecuta automáticamente las migraciones antes de iniciar el servidor en producción
 5. ✅ **Manejo de errores mejorado:** Los errores ahora se registran con más detalle para debugging
 
@@ -156,11 +153,11 @@ Antes de reportar un problema, verifica:
 - [ ] Variable `DATABASE_URL` está configurada en Railway
 - [ ] Variable `JWT_SECRET` está configurada en Railway
 - [ ] Variable `CORS_ORIGIN` está configurada en Railway
-- [ ] El Build Command en Railway está configurado como `npm run build`
+- [ ] El Build Command en Railway está **vacío o no configurado** (Railway ejecutará `npm install` automáticamente)
 - [ ] El Start Command en Railway está configurado como `npm run start:prod`
 - [ ] El servicio de PostgreSQL está activo en Railway (si aplica)
 - [ ] Las migraciones de Prisma se han ejecutado (automáticamente con `npm run start:prod` o manualmente)
-- [ ] Prisma Client está generado (se ejecuta automáticamente con `postinstall` y `build`)
+- [ ] Prisma Client está generado y TypeScript compilado (se ejecuta automáticamente con `postinstall`)
 - [ ] El endpoint `/health` muestra `"database": "connected"`
 - [ ] Los logs en Railway no muestran errores de conexión a la base de datos
 
