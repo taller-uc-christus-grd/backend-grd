@@ -2,7 +2,7 @@ import { Router, Request, Response } from 'express';
 import Joi from 'joi';
 import multer from 'multer';
 import * as path from 'path';
-import * as fs from 'fs';
+// import * as fs from 'fs'; // No se necesita para memoryStorage
 import csv from 'csv-parser';
 import * as XLSX from 'xlsx';
 import { requireAuth } from '../middlewares/auth';
@@ -11,20 +11,7 @@ import { Readable } from 'stream';
 
 const router = Router();
 
-// --- Configuración de Multer para importación de episodios ---
-//const UPLOAD_DIR = path.join(__dirname, '..', '..', 'uploads');
-//if (!fs.existsSync(UPLOAD_DIR)) {
-//  fs.mkdirSync(UPLOAD_DIR, { recursive: true });
-//}
-
-//const storage = multer.diskStorage({
-//  destination: (req, file, cb) => cb(null, UPLOAD_DIR),
-//  filename: (req, file, cb) => {
-//    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
-//    cb(null, 'episodes-import-' + uniqueSuffix + path.extname(file.originalname));
-//  },
-//});
-
+// --- Configuración de Multer (AHORA EN MEMORIA) ---
 const storage = multer.memoryStorage();
 
 const fileFilter = (req: Request, file: Express.Multer.File, cb: multer.FileFilterCallback) => {
@@ -239,17 +226,21 @@ function isValidDate(value?: any): boolean {
 
 function cleanString(value?: any): string | null {
   if (value === undefined || value === null) return null;
-  // Convertir a string siempre, incluso si es un número (para campos como Episodio CMBD que pueden venir como número desde Excel)
   const s = String(value);
   const out = s.replace(/\s+/g, ' ').trim();
   return out === '' ? null : out;
 }
 
+// ===================================================================
+// =================== ¡MODIFICACIÓN 1: validateRow! ===================
+// ===================================================================
+// Se elimina la validación de GRD. Solo validamos duplicados de Episodio y campos requeridos.
 async function validateRow(row: RawRow, index: number): Promise<boolean> {
   const requiredFields = ['Episodio CMBD', 'Hospital (Descripción)', 'RUT', 'IR GRD (Código)'];
   const missing = requiredFields.filter((f) => isEmpty(row[f]));
   
   if (missing.length > 0) {
+    console.log(`Fila ${index} rechazada: Campos faltantes: ${missing.join(', ')}`);
     return false;
   }
 
@@ -260,55 +251,78 @@ async function validateRow(row: RawRow, index: number): Promise<boolean> {
       where: { episodioCmdb: episodioCmdb },
     });
     if (existing) {
+      console.log(`Fila ${index} rechazada: Duplicado de Episodio CMBD ${episodioCmdb}`);
       return false;
     }
   } else {
+    console.log(`Fila ${index} rechazada: Episodio CMBD está vacío`);
     return false;
   }
   
-  // Validar que el GRD exista
+  // Validar que el GRD no esté vacío (pero no que exista, eso lo hace processRow)
   const grdCode = cleanString(row['IR GRD (Código)']);
-  if (grdCode) {
-    const grdRule = await prisma.grd.findUnique({ where: { codigo: grdCode }});
-    if (!grdRule) {
-      return false;
-    }
-  } else {
+  if (!grdCode) {
+    console.log(`Fila ${index} rechazada: IR GRD (Código) está vacío`);
     return false;
   }
 
   if (!isValidDate(row['Fecha Ingreso completa']) || !isValidDate(row['Fecha Completa'])) {
+    console.log(`Fila ${index} rechazada: Fecha inválida`);
     return false;
   }
 
   return true;
 }
 
+// ===================================================================
+// ================== ¡MODIFICACIÓN 2: processRow! ===================
+// ===================================================================
+// Se usa prisma.grd.upsert() para crear el GRD si no existe.
 async function processRow(row: RawRow) {
   const rut = cleanString(row['RUT']);
   const nombre = cleanString(row['Nombre']);
   const grdCode = cleanString(row['IR GRD (Código)'])!;
 
+  // 1. Crea o actualiza el Paciente (Upsert)
   const paciente = await prisma.paciente.upsert({
     where: { rut: rut || 'SIN-RUT' },
     update: {
       nombre,
-      sexo: cleanString(row['Sexo  (Desc)']),
+      sexo: cleanString(row['Sexo  (Desc)']) || cleanString(row['Sexo (Desc)']), // Cuidado con dobles espacios
       edad: isNumeric(row['Edad en años']) ? Number(row['Edad en años']) : null,
     },
     create: {
       rut: rut || 'SIN-RUT',
       nombre,
-      sexo: cleanString(row['Sexo  (Desc)']),
+      sexo: cleanString(row['Sexo  (Desc)']) || cleanString(row['Sexo (Desc)']),
       edad: isNumeric(row['Edad en años']) ? Number(row['Edad en años']) : null,
     },
   });
 
-  const grdRule = await prisma.grd.findUnique({ where: { codigo: grdCode }});
-  if (!grdRule) {
-    throw new Error(`Regla GRD ${grdCode} no encontrada durante el procesamiento.`);
-  }
+  // 2. ¡NUEVO! Crea o actualiza el GRD (Upsert)
+  const grdRule = await prisma.grd.upsert({
+    where: { codigo: grdCode },
+    // Si ya existe, actualiza sus datos con los de esta fila
+    update: {
+      // Usamos el nombre de columna que vimos en la imagen/frontend
+      peso: isNumeric(row['Peso Medio [Norma IR]'])
+        ? parseFloat(row['Peso Medio [Norma IR]'])
+        : undefined,
+      // Aquí puedes agregar más campos si los tienes, ej:
+      // precioBaseTramo: isNumeric(row['Precio Base']) ? parseFloat(row['Precio Base']) : undefined,
+    },
+    // Si no existe, créalo
+    create: {
+      codigo: grdCode,
+      // Usamos el motivo de egreso como descripción, o un placeholder
+      descripcion: cleanString(row['Motivo Egreso (Descripción)']) || `GRD ${grdCode}`,
+      peso: isNumeric(row['Peso Medio [Norma IR]'])
+        ? parseFloat(row['Peso Medio [Norma IR]'])
+        : undefined,
+    },
+  });
 
+  // 3. Crea el Episodio, ahora SÍ podemos vincular el grdId
   return await prisma.episodio.create({
     data: {
       centro: cleanString(row['Hospital (Descripción)']),
@@ -318,15 +332,20 @@ async function processRow(row: RawRow) {
       fechaIngreso: new Date(row['Fecha Ingreso completa']),
       fechaAlta: new Date(row['Fecha Completa']),
       servicioAlta: cleanString(row['Servicio Egreso (Descripción)']),
-      montoRn: isNumeric(row['Facturación Total del episodio'])
+      montoRn: isNumeric(row['Facturación Total del episodio']) // Asegúrate que esta columna exista en tu excel
         ? parseFloat(row['Facturación Total del episodio'])
         : 0,
-      pesoGrd: isNumeric(row['Peso GRD Medio (Todos)'])
-        ? parseFloat(row['Peso GRD Medio (Todos)'])
+      pesoGrd: isNumeric(row['Peso Medio [Norma IR]']) // Usamos la columna correcta
+        ? parseFloat(row['Peso Medio [Norma IR]'])
         : 0,
       inlierOutlier: cleanString(row['IR Alta Inlier / Outlier']),
+      diasEstada: isNumeric(row['Estancia real del episodio'])
+        ? parseInt(String(row['Estancia real del episodio']), 10)
+        : null,
+
+      // Vinculamos las entidades
       pacienteId: paciente.id,
-      grdId: grdRule.id,
+      grdId: grdRule.id, // <-- ¡Esto ahora SIEMPRE funcionará!
     },
     include: {
       paciente: true,
@@ -337,7 +356,6 @@ async function processRow(row: RawRow) {
 
 // Endpoint de importación de episodios (formato esperado por el frontend)
 router.post('/episodes/import', requireAuth, upload.single('file'), async (req: Request, res: Response) => {
-  //let filePath: string | null = null;
   const errorRecords: any[] = [];
   const validRecords: RawRow[] = [];
 
@@ -346,11 +364,17 @@ router.post('/episodes/import', requireAuth, upload.single('file'), async (req: 
       return res.status(400).json({ error: 'No se proporcionó ningún archivo' });
     }
 
-    // Verificar si se debe reemplazar (opción replace del frontend)
     const replace = req.body.replace === 'true';
     if (replace) {
-      // Eliminar todos los episodios existentes
+      console.log('REEMPLAZANDO DATOS: Eliminando episodios anteriores...');
+      // ¡CUIDADO! Esto borra todo.
+      // Para evitar borrar en cascada Pacientes o Grds (si están enlazados),
+      // es más seguro borrar solo los episodios.
       await prisma.episodio.deleteMany({});
+      // Si quisieras borrar todo:
+      // await prisma.episodio.deleteMany({});
+      // await prisma.paciente.deleteMany({});
+      // await prisma.grd.deleteMany({}); // <-- No recomendado si quieres mantener el catálogo
     }
 
     const fileBuffer = req.file.buffer;
@@ -358,11 +382,10 @@ router.post('/episodes/import', requireAuth, upload.single('file'), async (req: 
 
     let data: RawRow[] = [];
 
-    // Parsear archivo
+    // Parsear archivo desde el buffer de memoria
     if (ext === '.csv') {
-      const stream = Readable.from(fileBuffer.toString());
       await new Promise<void>((resolve, reject) => {
-        stream
+        Readable.from(fileBuffer)
           .pipe(csv())
           .on('data', (row) => data.push(row as RawRow))
           .on('end', resolve)
@@ -381,37 +404,35 @@ router.post('/episodes/import', requireAuth, upload.single('file'), async (req: 
     
     for (const row of data) {
       index++;
-      const isValid = await validateRow(row, index);
+      // Usamos el validateRow modificado
+      const isValid = await validateRow(row, index); 
       if (isValid) {
         validRecords.push(row);
         try {
+          // Usamos el processRow modificado
           const episode = await processRow(row);
           createdEpisodes.push(episode);
         } catch (err: any) {
+          console.error(`Error procesando fila ${index}:`, err.message);
           errorRecords.push({
             fila: index,
             error: err.message || 'Error al procesar fila',
           });
         }
       } else {
+        // El error ya se logueó en validateRow
         errorRecords.push({
           fila: index,
-          error: 'Fila inválida o duplicada',
+          error: 'Fila inválida o duplicada (ver logs del servidor para detalle)',
         });
       }
     }
-
-    // Limpiar archivo temporal
-    //if (filePath && fs.existsSync(filePath)) {
-    //  fs.unlinkSync(filePath);
-    //}
 
     // Helper para convertir Decimal a Number
     const toNumber = (value: any): number => {
       if (value === null || value === undefined) return 0;
       if (typeof value === 'number') return value;
       if (typeof value === 'string') return parseFloat(value) || 0;
-      // Si es un objeto Decimal de Prisma
       if (value && typeof value.toNumber === 'function') return value.toNumber();
       return 0;
     };
@@ -431,22 +452,21 @@ router.post('/episodes/import', requireAuth, upload.single('file'), async (req: 
         folio: e.numeroFolio || '',
         tipoEpisodio: e.tipoEpisodio || '',
         fechaIngreso: e.fechaIngreso ? e.fechaIngreso.toISOString().split('T')[0] : '',
-        fechaAlta: e.fechaAlta ? e.fechaAlta.toISOString().split('T')[0] : '',
+        fechaAlta: e.fechaAlta ? e.fechaAlta.toISOString().split('T')[MAIN] : '',
         servicioAlta: e.servicioAlta || '',
         grdCodigo: e.grd?.codigo || '',
         peso: toNumber(e.pesoGrd),
         montoRN: toNumber(e.montoRn),
         inlierOutlier: e.inlierOutlier || '',
       })),
+      // Opcional: enviar los primeros 50 errores al frontend
+      errorDetails: errorRecords.slice(0, 50),
     };
 
     return res.status(200).json(response);
   } catch (error: any) {
     console.error('Error al importar episodios:', error);
     console.error('Stack:', error?.stack);
-    //if (filePath && fs.existsSync(filePath)) {
-    //  try { fs.unlinkSync(filePath); } catch (_) {}
-    //}
     return res.status(500).json({
       error: 'Error interno del servidor',
       message: error?.message || 'Error procesando archivo',
@@ -505,7 +525,6 @@ router.get('/episodes/final', requireAuth, async (req: Request, res: Response) =
       if (value === null || value === undefined) return 0;
       if (typeof value === 'number') return value;
       if (typeof value === 'string') return parseFloat(value) || 0;
-      // Si es un objeto Decimal de Prisma
       if (value && typeof value.toNumber === 'function') return value.toNumber();
       return 0;
     };
