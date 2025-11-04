@@ -104,8 +104,18 @@ router.get('/episodes', requireAuth, async (_req: Request, res: Response) => {
 router.get('/episodes/:id', requireAuth, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
+    
+    if (!id) {
+      return res.status(400).json({ error: 'ID es requerido' });
+    }
+    
+    const idNum = parseInt(id);
+    if (isNaN(idNum)) {
+      return res.status(400).json({ error: 'ID inválido' });
+    }
+    
     const episodio = await prisma.episodio.findUnique({
-      where: { id: parseInt(id) },
+      where: { id: idNum },
       include: {
         paciente: true,
         grd: true,
@@ -118,9 +128,13 @@ router.get('/episodes/:id', requireAuth, async (req: Request, res: Response) => 
       return res.status(404).json({ error: 'Episodio no encontrado' });
     }
     res.json(episodio);
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: 'Error al obtener episodio' });
+  } catch (error: any) {
+    console.error('Error al obtener episodio:', error);
+    console.error('Stack:', error?.stack);
+    res.status(500).json({ 
+      error: 'Error al obtener episodio',
+      message: error?.message || 'Error desconocido'
+    });
   }
 });
 
@@ -218,7 +232,8 @@ function isValidDate(value?: any): boolean {
 
 function cleanString(value?: any): string | null {
   if (value === undefined || value === null) return null;
-  const s = typeof value === 'string' ? value : String(value);
+  // Convertir a string siempre, incluso si es un número (para campos como Episodio CMBD que pueden venir como número desde Excel)
+  const s = String(value);
   const out = s.replace(/\s+/g, ' ').trim();
   return out === '' ? null : out;
 }
@@ -231,11 +246,16 @@ async function validateRow(row: RawRow, index: number): Promise<boolean> {
     return false;
   }
 
-  // Validación de duplicados
-  const existing = await prisma.episodio.findFirst({
-    where: { episodioCmdb: row['Episodio CMBD'] },
-  });
-  if (existing) {
+  // Validación de duplicados - convertir a string para asegurar compatibilidad con Prisma
+  const episodioCmdb = cleanString(row['Episodio CMBD']);
+  if (episodioCmdb) {
+    const existing = await prisma.episodio.findFirst({
+      where: { episodioCmdb: episodioCmdb },
+    });
+    if (existing) {
+      return false;
+    }
+  } else {
     return false;
   }
   
