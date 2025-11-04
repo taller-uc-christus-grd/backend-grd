@@ -1,8 +1,8 @@
 import { Router, Request, Response } from 'express';
 import Joi from 'joi';
 import multer from 'multer';
-// import * as path from 'path';
-// import * as fs from 'fs';
+import * as path from 'path';
+import * as fs from 'fs';
 import csv from 'csv-parser';
 import * as XLSX from 'xlsx';
 import { requireAuth } from '../middlewares/auth';
@@ -352,7 +352,7 @@ router.post('/episodes/import', requireAuth, upload.single('file'), async (req: 
       await prisma.episodio.deleteMany({});
     }
 
-    filePath = req.file.path;
+    const fileBuffer = req.file.buffer;
     const ext = path.extname(req.file.originalname).toLowerCase();
 
     let data: RawRow[] = [];
@@ -360,14 +360,14 @@ router.post('/episodes/import', requireAuth, upload.single('file'), async (req: 
     // Parsear archivo
     if (ext === '.csv') {
       await new Promise<void>((resolve, reject) => {
-        fs.createReadStream(filePath!)
+        fs.createReadStream(fileBuffer)
           .pipe(csv())
           .on('data', (row) => data.push(row as RawRow))
           .on('end', resolve)
           .on('error', reject);
       });
     } else {
-      const workbook = XLSX.readFile(filePath);
+      const workbook = XLSX.readFile(fileBuffer);
       const sheetName = workbook.SheetNames[0];
       const worksheet = workbook.Sheets[sheetName];
       data = XLSX.utils.sheet_to_json(worksheet) as RawRow[];
@@ -442,9 +442,9 @@ router.post('/episodes/import', requireAuth, upload.single('file'), async (req: 
   } catch (error: any) {
     console.error('Error al importar episodios:', error);
     console.error('Stack:', error?.stack);
-    if (filePath && fs.existsSync(filePath)) {
-      try { fs.unlinkSync(filePath); } catch (_) {}
-    }
+    //if (filePath && fs.existsSync(filePath)) {
+    //  try { fs.unlinkSync(filePath); } catch (_) {}
+    //}
     return res.status(500).json({
       error: 'Error interno del servidor',
       message: error?.message || 'Error procesando archivo',
