@@ -82,7 +82,7 @@ const episodioSchema = Joi.object({
 });
 
 // Listar episodios (AHORA DESDE PRISMA)
-router.get('/episodios', requireAuth, async (_req: Request, res: Response) => {
+router.get('/episodes', requireAuth, async (_req: Request, res: Response) => {
   try {
     const episodios = await prisma.episodio.findMany({
       include: {
@@ -101,7 +101,7 @@ router.get('/episodios', requireAuth, async (_req: Request, res: Response) => {
 });
 
 // Obtener episodio por id (AHORA DESDE PRISMA)
-router.get('/episodios/:id', requireAuth, async (req: Request, res: Response) => {
+router.get('/episodes/:id', requireAuth, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const episodio = await prisma.episodio.findUnique({
@@ -125,7 +125,7 @@ router.get('/episodios/:id', requireAuth, async (req: Request, res: Response) =>
 });
 
 // Crear episodio (AHORA EN PRISMA)
-router.post('/episodios', requireAuth, async (req: Request, res: Response) => {
+router.post('/episodes', requireAuth, async (req: Request, res: Response) => {
   try {
     const { error, value } = episodioSchema.validate(req.body, {
       stripUnknown: true,
@@ -150,7 +150,7 @@ router.post('/episodios', requireAuth, async (req: Request, res: Response) => {
 });
 
 // Actualizar episodio (AHORA EN PRISMA)
-router.put('/episodios/:id', requireAuth, async (req: Request, res: Response) => {
+router.put('/episodes/:id', requireAuth, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const { error, value } = episodioSchema.validate(req.body, {
@@ -180,7 +180,7 @@ router.put('/episodios/:id', requireAuth, async (req: Request, res: Response) =>
 });
 
 // Eliminar episodio (AHORA EN PRISMA)
-router.delete('/episodios/:id', requireAuth, async (req: Request, res: Response) => {
+router.delete('/episodes/:id', requireAuth, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     await prisma.episodio.delete({
@@ -309,7 +309,7 @@ async function processRow(row: RawRow) {
 }
 
 // Endpoint de importación de episodios (formato esperado por el frontend)
-router.post('/episodios/import', requireAuth, upload.single('file'), async (req: Request, res: Response) => {
+router.post('/episodes/import', requireAuth, upload.single('file'), async (req: Request, res: Response) => {
   let filePath: string | null = null;
   const errorRecords: any[] = [];
   const validRecords: RawRow[] = [];
@@ -416,7 +416,7 @@ router.post('/episodios/import', requireAuth, upload.single('file'), async (req:
 });
 
 // Endpoint para obtener metadata de episodios
-router.get('/episodios/meta', requireAuth, async (_req: Request, res: Response) => {
+router.get('/episodes/meta', requireAuth, async (_req: Request, res: Response) => {
   try {
     const count = await prisma.episodio.count();
     const lastEpisode = await prisma.episodio.findFirst({
@@ -431,6 +431,58 @@ router.get('/episodios/meta', requireAuth, async (_req: Request, res: Response) 
   } catch (error) {
     console.error('Error al obtener metadata:', error);
     return res.status(500).json({ error: 'Error al obtener metadata' });
+  }
+});
+
+// Endpoint para obtener episodios finales (con paginación)
+router.get('/episodes/final', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const page = parseInt(req.query.page as string) || 1;
+    const pageSize = parseInt(req.query.pageSize as string) || 10;
+    const skip = (page - 1) * pageSize;
+
+    const [episodes, total] = await Promise.all([
+      prisma.episodio.findMany({
+        skip,
+        take: pageSize,
+        include: {
+          paciente: true,
+          grd: true,
+        },
+        orderBy: {
+          fechaIngreso: 'desc',
+        },
+      }),
+      prisma.episodio.count(),
+    ]);
+
+    // Transformar al formato esperado por el frontend
+    const items = episodes.map((e) => ({
+      episodio: e.episodioCmdb,
+      nombre: e.paciente?.nombre || '',
+      rut: e.paciente?.rut || '',
+      centro: e.centro,
+      folio: e.numeroFolio,
+      tipoEpisodio: e.tipoEpisodio,
+      fechaIngreso: e.fechaIngreso?.toISOString().split('T')[0],
+      fechaAlta: e.fechaAlta?.toISOString().split('T')[0],
+      servicioAlta: e.servicioAlta,
+      grdCodigo: e.grd?.codigo || '',
+      peso: e.pesoGrd || 0,
+      montoRN: e.montoRn || 0,
+      inlierOutlier: e.inlierOutlier || '',
+    }));
+
+    return res.json({
+      items,
+      total,
+      page,
+      pageSize,
+      totalPages: Math.ceil(total / pageSize),
+    });
+  } catch (error) {
+    console.error('Error al obtener episodios finales:', error);
+    return res.status(500).json({ error: 'Error al obtener episodios finales' });
   }
 });
 
