@@ -1,8 +1,8 @@
 import { Router, Request, Response } from 'express';
 import Joi from 'joi';
 import multer from 'multer';
-import * as path from 'path';
-import * as fs from 'fs';
+// import * as path from 'path';
+// import * as fs from 'fs';
 import csv from 'csv-parser';
 import * as XLSX from 'xlsx';
 import { requireAuth } from '../middlewares/auth';
@@ -11,18 +11,20 @@ import { prisma } from '../db/client'; // ¡Importante! Conecta con la DB
 const router = Router();
 
 // --- Configuración de Multer para importación de episodios ---
-const UPLOAD_DIR = path.join(__dirname, '..', '..', 'uploads');
-if (!fs.existsSync(UPLOAD_DIR)) {
-  fs.mkdirSync(UPLOAD_DIR, { recursive: true });
-}
+//const UPLOAD_DIR = path.join(__dirname, '..', '..', 'uploads');
+//if (!fs.existsSync(UPLOAD_DIR)) {
+//  fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+//}
 
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, UPLOAD_DIR),
-  filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
-    cb(null, 'episodes-import-' + uniqueSuffix + path.extname(file.originalname));
-  },
-});
+//const storage = multer.diskStorage({
+//  destination: (req, file, cb) => cb(null, UPLOAD_DIR),
+//  filename: (req, file, cb) => {
+//    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
+//    cb(null, 'episodes-import-' + uniqueSuffix + path.extname(file.originalname));
+//  },
+//});
+
+const storage = multer.memoryStorage();
 
 const fileFilter = (req: Request, file: Express.Multer.File, cb: multer.FileFilterCallback) => {
   const allowedMimes = [
@@ -334,7 +336,7 @@ async function processRow(row: RawRow) {
 
 // Endpoint de importación de episodios (formato esperado por el frontend)
 router.post('/episodes/import', requireAuth, upload.single('file'), async (req: Request, res: Response) => {
-  let filePath: string | null = null;
+  //let filePath: string | null = null;
   const errorRecords: any[] = [];
   const validRecords: RawRow[] = [];
 
@@ -398,9 +400,9 @@ router.post('/episodes/import', requireAuth, upload.single('file'), async (req: 
     }
 
     // Limpiar archivo temporal
-    if (filePath && fs.existsSync(filePath)) {
-      fs.unlinkSync(filePath);
-    }
+    //if (filePath && fs.existsSync(filePath)) {
+    //  fs.unlinkSync(filePath);
+    //}
 
     // Helper para convertir Decimal a Number
     const toNumber = (value: any): number => {
