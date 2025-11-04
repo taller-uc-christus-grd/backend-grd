@@ -5,15 +5,15 @@
   "main": "dist/index.js",
   "scripts": {
     "dev": "nodemon --watch src --exec ts-node src/index.ts",
-    "build": "prisma generate && tsc",
-    "build:prod": "prisma generate && tsc",
+    "build": "npx prisma generate && npx tsc",
+    "build:prod": "npx prisma generate && npx tsc",
     "start": "node dist/index.js",
-    "start:prod": "prisma migrate deploy && node dist/index.js",
-    "postinstall": "prisma generate && tsc",
+    "start:prod": "npx prisma migrate deploy && npx prisma db seed && node dist/index.js",
+    "postinstall": "npx prisma generate && npx tsc",
     "test": "jest",
-    "prisma:migrate": "prisma migrate dev --name init",
-    "prisma:migrate:deploy": "prisma migrate deploy",
-    "prisma:generate": "prisma generate",
+    "prisma:migrate": "npx prisma migrate dev --name init",
+    "prisma:migrate:deploy": "npx prisma migrate deploy",
+    "prisma:generate": "npx prisma generate",
     "seed": "ts-node prisma/seed.ts"
   },
   "keywords": [

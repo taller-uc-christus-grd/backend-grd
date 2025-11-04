@@ -37,32 +37,62 @@ Si ves `"database": "disconnected"`, el problema es la conexión a la base de da
 
 ## ✅ Soluciones
 
-### 1. Verificar Variables de Entorno en Railway
+### 1. Configurar Base de Datos en Railway
 
-Ve a tu proyecto en Railway → **Variables** y asegúrate de tener estas variables configuradas:
+**🔴 PROBLEMA COMÚN:** Si ves el error `Can't reach database server at 'localhost:5432'`, significa que la variable `DATABASE_URL` no está configurada o está usando un valor de desarrollo local.
 
-#### Variables Requeridas:
+#### Opción A: Usar PostgreSQL de Railway (Recomendado) ✅
+
+1. **Crear servicio de PostgreSQL:**
+   - En tu proyecto Railway, haz clic en **+ New**
+   - Selecciona **Database** → **Add PostgreSQL**
+   - Railway creará un servicio de PostgreSQL automáticamente
+
+2. **Conectar el backend al servicio de PostgreSQL:**
+   - En tu servicio de backend, haz clic en **Variables**
+   - Haz clic en **+ New Variable** → **Reference Variable**
+   - Selecciona tu servicio de PostgreSQL
+   - Selecciona la variable `DATABASE_URL`
+   - Esto creará automáticamente una referencia a `DATABASE_URL` desde el servicio de PostgreSQL
+
+   **Alternativa:** Si Railway ya detectó el servicio de PostgreSQL, la variable `DATABASE_URL` puede estar disponible automáticamente. Verifica en **Variables** del servicio del backend.
+
+3. **Verificar que DATABASE_URL esté configurada:**
+   - Ve a tu servicio backend → **Variables**
+   - Deberías ver `DATABASE_URL` listada (puede aparecer como una referencia a otro servicio)
+   - El valor debería ser algo como: `postgresql://postgres:password@host:puerto/railway?schema=public`
+   - **NO debería ser** `postgresql://...@localhost:5432/...`
+
+#### Opción B: Usar Base de Datos Externa
+
+Si usas una base de datos externa (no de Railway):
+
+1. Ve a tu servicio backend → **Variables**
+2. Haz clic en **+ New Variable**
+3. Añade:
+   - **Key**: `DATABASE_URL`
+   - **Value**: `postgresql://usuario:password@host:puerto/database?schema=public`
+   - Reemplaza `usuario`, `password`, `host`, `puerto` y `database` con tus valores reales
+
+#### Variables Adicionales Requeridas:
+
+Además de `DATABASE_URL`, configura estas variables en tu servicio backend:
 
 ```env
-# URL de conexión a PostgreSQL (Railway puede generarla automáticamente)
-DATABASE_URL=postgresql://usuario:password@host:puerto/database?schema=public
-
 # Secreto para JWT (genera uno seguro)
 JWT_SECRET=tu-secreto-muy-seguro-aqui
 
 # Origen del frontend para CORS
 CORS_ORIGIN=https://conectagrd.netlify.app
 
-# Puerto (Railway lo asigna automáticamente, pero puedes configurarlo)
-PORT=3000
-
-# Entorno
+# Entorno (opcional, pero recomendado)
 NODE_ENV=production
 ```
 
-**Importante:**
-- Si Railway tiene un servicio de PostgreSQL, debería crear automáticamente la variable `DATABASE_URL`. Verifica que esté conectado.
-- Si no hay variable `DATABASE_URL`, conecta un servicio de PostgreSQL o crea una base de datos externa y añade la URL manualmente.
+**⚠️ IMPORTANTE:** 
+- La variable `DATABASE_URL` **NO debe contener** `localhost` o `127.0.0.1` en producción
+- Railway usa hosts internos para conectar servicios, no `localhost`
+- Si ves `localhost:5432` en los logs, significa que la variable no está configurada correctamente
 
 ### 2. Configurar Build y Start Commands en Railway
 
@@ -115,15 +145,31 @@ Si prefieres ejecutar las migraciones manualmente:
 
 ### 4. Verificar la Conexión a la Base de Datos
 
-Si la base de datos está desconectada, verifica:
+Si ves errores de conexión a la base de datos, sigue estos pasos:
 
-1. **PostgreSQL está corriendo:** En Railway, ve a tu servicio de PostgreSQL y verifica que esté activo
-2. **DATABASE_URL es correcta:** Verifica que la URL tenga el formato correcto:
-   ```
-   postgresql://usuario:password@host:puerto/database?schema=public
-   ```
-3. **Las credenciales son correctas:** Verifica que el usuario y contraseña sean correctos
-4. **El firewall permite la conexión:** Si usas una base de datos externa, verifica que Railway pueda acceder a ella
+1. **Verificar que PostgreSQL esté activo:**
+   - En Railway, ve a tu servicio de PostgreSQL
+   - Verifica que el estado sea **Active** (no **Paused** o **Stopped**)
+
+2. **Verificar que DATABASE_URL esté configurada:**
+   - Ve a tu servicio backend → **Variables**
+   - Busca `DATABASE_URL`
+   - Si no está, sigue los pasos del punto 1 para configurarla
+   - **Importante:** El valor NO debe contener `localhost` o `127.0.0.1`
+
+3. **Verificar el formato de DATABASE_URL:**
+   - Debe tener el formato: `postgresql://usuario:password@host:puerto/database?schema=public`
+   - En Railway, el `host` generalmente será algo como `containers-us-west-xxx.railway.app` o similar
+   - **NO debe ser** `localhost` o `127.0.0.1`
+
+4. **Reiniciar el servicio después de configurar DATABASE_URL:**
+   - Después de añadir o modificar `DATABASE_URL`, haz clic en **Redeploy** en tu servicio backend
+   - O espera a que Railway haga un redeploy automático
+
+5. **Verificar los logs:**
+   - Después del redeploy, revisa los logs
+   - Deberías ver: `✅ Conectado a la base de datos`
+   - Si ves `❌ Error al conectar con la base de datos`, verifica los pasos anteriores
 
 ### 5. Regenerar Prisma Client
 
