@@ -122,3 +122,37 @@ export async function deleteUser(req: Request, res: Response) {
     return res.status(500).json({ message: 'Error eliminando usuario' });
   }
 }
+
+export async function toggleUserStatus(req: Request, res: Response) {
+  try {
+    const { id } = req.params;
+    const { activo } = req.body as {
+      activo?: boolean;
+    };
+
+    if (activo === undefined) {
+      return res.status(400).json({ message: 'El campo activo es obligatorio' });
+    }
+
+    const usuario = await prisma.usuario.update({
+      where: { id: parseInt(id) },
+      data: { activo },
+      select: {
+        id: true,
+        nombre: true,
+        email: true,
+        rol: true,
+        activo: true,
+        updatedAt: true
+      }
+    });
+
+    return res.json({ ...usuario, rol: usuario.rol.toLowerCase() });
+  } catch (error: any) {
+    if (error.code === 'P2025') {
+      return res.status(404).json({ message: 'Usuario no encontrado' });
+    }
+    console.error('Error cambiando estado del usuario:', error);
+    return res.status(500).json({ message: 'Error cambiando estado del usuario' });
+  }
+}
