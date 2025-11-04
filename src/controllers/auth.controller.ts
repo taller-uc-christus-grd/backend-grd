@@ -81,8 +81,13 @@ export async function login(req: Request, res: Response) {
       }
     });
 
-    if (!usuario || !usuario.activo) {
+    if (!usuario) {
       return res.status(401).json({ message: 'Credenciales inválidas' });
+    }
+
+    // Verificar si el usuario está inactivo
+    if (!usuario.activo) {
+      return res.status(403).json({ message: 'Usuario inactivo. Contacta al administrador.' });
     }
 
     const passwordValido = await bcrypt.compare(password, usuario.passwordHash);
