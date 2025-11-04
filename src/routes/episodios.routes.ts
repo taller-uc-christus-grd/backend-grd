@@ -90,13 +90,17 @@ router.get('/episodes', requireAuth, async (_req: Request, res: Response) => {
         grd: { select: { id: true, codigo: true, descripcion: true } },
       },
       orderBy: {
-        fechaIngreso: 'desc',
+        id: 'desc',
       },
     });
     res.json({ total: episodios.length, data: episodios });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: 'Error al listar episodios' });
+  } catch (error: any) {
+    console.error('Error al listar episodios:', error);
+    console.error('Stack:', error?.stack);
+    res.status(500).json({ 
+      error: 'Error al listar episodios',
+      message: error?.message || 'Error desconocido'
+    });
   }
 });
 
@@ -485,9 +489,9 @@ router.get('/episodes/final', requireAuth, async (req: Request, res: Response) =
           paciente: true,
           grd: true,
         },
-        orderBy: {
-          fechaIngreso: 'desc',
-        },
+      orderBy: {
+        id: 'desc',
+      },
       }),
       prisma.episodio.count(),
     ]);
