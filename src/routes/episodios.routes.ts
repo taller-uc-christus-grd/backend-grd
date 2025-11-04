@@ -452,10 +452,13 @@ router.post('/episodes/import', requireAuth, upload.single('file'), async (req: 
         folio: e.numeroFolio || '',
         tipoEpisodio: e.tipoEpisodio || '',
         fechaIngreso: e.fechaIngreso ? e.fechaIngreso.toISOString().split('T')[0] : '',
-        fechaAlta: e.fechaAlta ? e.fechaAlta.toISOString().split('T')[MAIN] : '',
+        // ===================================================================
+        // ======================= ¡AQUÍ ESTÁ LA CORRECCIÓN! =================
+        // ===================================================================
+        fechaAlta: e.fechaAlta ? e.fechaAlta.toISOString().split('T')[0] : '', // <-- ANTES DECÍA [MAIN]
         servicioAlta: e.servicioAlta || '',
         grdCodigo: e.grd?.codigo || '',
-        peso: toNumber(e.pesoGrd),
+        peso: toNumber(e.pesoGd),
         montoRN: toNumber(e.montoRn),
         inlierOutlier: e.inlierOutlier || '',
       })),
