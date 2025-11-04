@@ -41,13 +41,15 @@ export async function signup(req: Request, res: Response) {
     });
 
     const token = signToken({ id: usuario.id.toString(), role: usuario.rol });
+    // Convertir el rol a minúsculas y usar 'role' en lugar de 'rol' para coincidir con el frontend
+    const roleLower = usuario.rol.toLowerCase();
     return res.status(201).json({
       token,
       user: {
-        id: usuario.id,
+        id: usuario.id.toString(), // Asegurar que sea string
         nombre: usuario.nombre,
         email: usuario.email,
-        rol: usuario.rol.toLowerCase(), // <-- CAMBIO AQUÍ
+        role: roleLower, // Cambiado de 'rol' a 'role' para coincidir con el frontend
       }
     });
   } catch (error: any) {
@@ -89,13 +91,15 @@ export async function login(req: Request, res: Response) {
     }
 
     const token = signToken({ id: usuario.id.toString(), role: usuario.rol });
+    // Convertir el rol a minúsculas y usar 'role' en lugar de 'rol' para coincidir con el frontend
+    const roleLower = usuario.rol.toLowerCase();
     return res.json({
       token,
       user: {
-        id: usuario.id,
+        id: usuario.id.toString(), // Asegurar que sea string
         nombre: usuario.nombre,
         email: usuario.email,
-        rol: usuario.rol.toLowerCase(), // <-- CAMBIO AQUÍ
+        role: roleLower, // Cambiado de 'rol' a 'role' para coincidir con el frontend
       }
     });
   } catch (error: any) {
@@ -121,10 +125,10 @@ export async function me(req: Request, res: Response) {
 
   return res.json({
     user: {
-      id: usuario.id,
+      id: usuario.id.toString(), // Asegurar que sea string
       nombre: usuario.nombre,
       email: usuario.email,
-      rol: usuario.rol.toLowerCase(), // <-- CAMBIO AQUÍ
+      role: usuario.rol.toLowerCase(), // Cambiado de 'rol' a 'role' para coincidir con el frontend
     },
   });
 }

@@ -20,10 +20,23 @@ app.set('trust proxy', 1);
 
 // Security middleware
 app.use(helmet());
+
+// CORS configuration
+const corsOrigins = process.env.CORS_ORIGIN 
+  ? process.env.CORS_ORIGIN.split(',').map(s => s.trim())
+  : ['http://localhost:5173', 'http://localhost:3000']; // Default para desarrollo local
+
 app.use(cors({ 
-  origin: (process.env.CORS_ORIGIN || '*').split(',').map(s => s.trim()),
-  credentials: true
+  origin: corsOrigins,
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
 }));
+
+// Log CORS configuration en desarrollo
+if (process.env.NODE_ENV !== 'production') {
+  console.log('🌐 CORS configurado para:', corsOrigins);
+}
 
 // Rate limiting
 app.use(rateLimit({ 
@@ -47,8 +60,8 @@ app.get('/health', (_req, res) => {
 });
 
 // API Routes
-app.use('/auth', authRoutes);
-app.use('/usuarios', usersRoutes);
+app.use('/api/auth', authRoutes); // Cambiado de /auth a /api/auth para coincidir con el frontend
+app.use('/api/users', usersRoutes); // Cambiado de /usuarios a /api/users para coincidir con el frontend
 app.use('/api', exportRoutes);
 app.use('/api', uploadRoutes);
 app.use('/api', episodiosRoutes);
