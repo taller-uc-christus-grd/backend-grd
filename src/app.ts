@@ -10,6 +10,7 @@ import uploadRoutes from './routes/upload.routes';
 import episodiosRoutes from './routes/episodios.routes';
 import respaldosRoutes from './routes/respaldos.routes';
 import { errorHandler } from './middlewares/error';
+import { prisma } from './db/client';
 
 dotenv.config();
 
@@ -78,13 +79,32 @@ app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // Health check
-app.get('/health', (_req, res) => {
-  res.json({ 
-    ok: true, 
+app.get('/health', async (_req, res) => {
+  const health = {
+    ok: true,
     message: 'Servidor GRD activo 🚀',
     timestamp: new Date().toISOString(),
-    service: 'backend-grd'
-  });
+    service: 'backend-grd',
+    database: 'unknown' as 'connected' | 'disconnected' | 'unknown',
+    environment: process.env.NODE_ENV || 'development',
+    hasDatabaseUrl: !!process.env.DATABASE_URL,
+    hasJwtSecret: !!process.env.JWT_SECRET,
+    corsOrigin: process.env.CORS_ORIGIN || 'not configured'
+  };
+
+  // Verificar conexión a la base de datos
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+    health.database = 'connected';
+  } catch (error: any) {
+    health.database = 'disconnected';
+    health.ok = false;
+    health.message = 'Servidor activo pero base de datos desconectada';
+    console.error('❌ Error al verificar conexión a la base de datos:', error?.message || error);
+  }
+
+  const statusCode = health.ok ? 200 : 503;
+  res.status(statusCode).json(health);
 });
 
 // API Routes

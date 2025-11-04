@@ -103,8 +103,17 @@ export async function login(req: Request, res: Response) {
       }
     });
   } catch (error: any) {
-    console.error('Error en login:', error);
-    return res.status(500).json({ message: 'Error en login' });
+    console.error('❌ Error en login:', {
+      message: error?.message,
+      stack: error?.stack,
+      code: error?.code,
+      name: error?.name,
+      body: req.body
+    });
+    return res.status(500).json({ 
+      message: 'Error en login',
+      error: process.env.NODE_ENV === 'development' ? error?.message : undefined
+    });
   }
 }
 

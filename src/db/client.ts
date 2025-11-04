@@ -1,2 +1,36 @@
 import { PrismaClient } from '@prisma/client';
-export const prisma = new PrismaClient();
+
+export const prisma = new PrismaClient({
+  log: process.env.NODE_ENV === 'development' 
+    ? ['query', 'error', 'warn'] 
+    : ['error'],
+  errorFormat: 'pretty',
+});
+
+// Conectar a la base de datos de manera asíncrona (no bloquea)
+prisma.$connect()
+  .then(() => {
+    console.log('✅ Conectado a la base de datos');
+  })
+  .catch((error) => {
+    console.error('❌ Error al conectar con la base de datos:', error?.message || error);
+    if (!process.env.DATABASE_URL) {
+      console.error('⚠️  DATABASE_URL no está configurada');
+    } else {
+      console.error('⚠️  DATABASE_URL está configurada pero la conexión falló');
+    }
+  });
+
+// Manejar desconexión graceful
+const gracefulShutdown = async () => {
+  try {
+    await prisma.$disconnect();
+    console.log('👋 Desconectado de la base de datos');
+  } catch (error) {
+    console.error('❌ Error al desconectar de la base de datos:', error);
+  }
+};
+
+process.on('SIGINT', gracefulShutdown);
+process.on('SIGTERM', gracefulShutdown);
+process.on('beforeExit', gracefulShutdown);
