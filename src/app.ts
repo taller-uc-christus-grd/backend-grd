@@ -18,32 +18,60 @@ const app = express();
 // Trust proxy (para rate limiting detrás de proxy)
 app.set('trust proxy', 1);
 
-// Security middleware
-app.use(helmet());
-
-// CORS configuration
+// CORS configuration - DEBE IR ANTES DE HELMET
 const corsOrigins = process.env.CORS_ORIGIN 
   ? process.env.CORS_ORIGIN.split(',').map(s => s.trim())
   : ['http://localhost:5173', 'http://localhost:3000']; // Default para desarrollo local
 
 app.use(cors({ 
-  origin: corsOrigins,
+  origin: (origin, callback) => {
+    // Permitir peticiones sin origen (mobile apps, Postman, etc.)
+    if (!origin) return callback(null, true);
+    
+    // Verificar si el origen está en la lista permitida
+    if (corsOrigins.includes('*') || corsOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      console.warn('🚫 Origen no permitido:', origin);
+      console.warn('🌐 Orígenes permitidos:', corsOrigins);
+      callback(new Error('No permitido por CORS'));
+    }
+  },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  exposedHeaders: ['Content-Length', 'X-Foo', 'X-Bar'],
+  preflightContinue: false,
+  optionsSuccessStatus: 204
 }));
 
-// Log CORS configuration en desarrollo
-if (process.env.NODE_ENV !== 'production') {
-  console.log('🌐 CORS configurado para:', corsOrigins);
-}
+// Log CORS configuration (siempre mostrar para debugging)
+console.log('🌐 CORS configurado para:', corsOrigins);
+console.log('🌐 NODE_ENV:', process.env.NODE_ENV || 'development');
 
-// Rate limiting
-app.use(rateLimit({ 
+// Security middleware - Configurar Helmet para no bloquear CORS
+app.use(helmet({
+  crossOriginResourcePolicy: { policy: "cross-origin" },
+  crossOriginEmbedderPolicy: false,
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      scriptSrc: ["'self'"],
+      imgSrc: ["'self'", "data:", "https:"],
+    },
+  },
+}));
+
+// Rate limiting - Excluir peticiones OPTIONS (preflight)
+const limiter = rateLimit({ 
   windowMs: 15 * 60 * 1000, 
   max: 100,
-  message: { error: 'Demasiadas solicitudes desde esta IP, intenta de nuevo más tarde.' }
-}));
+  message: { error: 'Demasiadas solicitudes desde esta IP, intenta de nuevo más tarde.' },
+  skip: (req) => req.method === 'OPTIONS' // No limitar peticiones OPTIONS
+});
+
+app.use(limiter);
 
 // Body parsing
 app.use(express.json({ limit: '10mb' }));
