@@ -378,6 +378,16 @@ router.post('/episodes/import', requireAuth, upload.single('file'), async (req: 
       fs.unlinkSync(filePath);
     }
 
+    // Helper para convertir Decimal a Number
+    const toNumber = (value: any): number => {
+      if (value === null || value === undefined) return 0;
+      if (typeof value === 'number') return value;
+      if (typeof value === 'string') return parseFloat(value) || 0;
+      // Si es un objeto Decimal de Prisma
+      if (value && typeof value.toNumber === 'function') return value.toNumber();
+      return 0;
+    };
+
     // Formato de respuesta esperado por el frontend
     const response = {
       summary: {
@@ -386,18 +396,18 @@ router.post('/episodes/import', requireAuth, upload.single('file'), async (req: 
         errors: errorRecords.length,
       },
       episodes: createdEpisodes.map((e) => ({
-        episodio: e.episodioCmdb,
+        episodio: e.episodioCmdb || '',
         nombre: e.paciente?.nombre || '',
         rut: e.paciente?.rut || '',
-        centro: e.centro,
-        folio: e.numeroFolio,
-        tipoEpisodio: e.tipoEpisodio,
-        fechaIngreso: e.fechaIngreso?.toISOString().split('T')[0],
-        fechaAlta: e.fechaAlta?.toISOString().split('T')[0],
-        servicioAlta: e.servicioAlta,
+        centro: e.centro || '',
+        folio: e.numeroFolio || '',
+        tipoEpisodio: e.tipoEpisodio || '',
+        fechaIngreso: e.fechaIngreso ? e.fechaIngreso.toISOString().split('T')[0] : '',
+        fechaAlta: e.fechaAlta ? e.fechaAlta.toISOString().split('T')[0] : '',
+        servicioAlta: e.servicioAlta || '',
         grdCodigo: e.grd?.codigo || '',
-        peso: e.pesoGrd || 0,
-        montoRN: e.montoRn || 0,
+        peso: toNumber(e.pesoGrd),
+        montoRN: toNumber(e.montoRn),
         inlierOutlier: e.inlierOutlier || '',
       })),
     };
@@ -405,12 +415,14 @@ router.post('/episodes/import', requireAuth, upload.single('file'), async (req: 
     return res.status(200).json(response);
   } catch (error: any) {
     console.error('Error al importar episodios:', error);
+    console.error('Stack:', error?.stack);
     if (filePath && fs.existsSync(filePath)) {
       try { fs.unlinkSync(filePath); } catch (_) {}
     }
     return res.status(500).json({
       error: 'Error interno del servidor',
-      message: error?.message || 'Error procesando archivo'
+      message: error?.message || 'Error procesando archivo',
+      details: process.env.NODE_ENV === 'development' ? error?.stack : undefined
     });
   }
 });
@@ -426,11 +438,15 @@ router.get('/episodes/meta', requireAuth, async (_req: Request, res: Response) =
     
     return res.json({
       count,
-      lastImportedAt: lastEpisode?.createdAt?.toISOString(),
+      lastImportedAt: lastEpisode?.createdAt ? lastEpisode.createdAt.toISOString() : null,
     });
-  } catch (error) {
+  } catch (error: any) {
     console.error('Error al obtener metadata:', error);
-    return res.status(500).json({ error: 'Error al obtener metadata' });
+    console.error('Stack:', error?.stack);
+    return res.status(500).json({ 
+      error: 'Error al obtener metadata',
+      message: error?.message || 'Error desconocido'
+    });
   }
 });
 
@@ -456,20 +472,30 @@ router.get('/episodes/final', requireAuth, async (req: Request, res: Response) =
       prisma.episodio.count(),
     ]);
 
+    // Helper para convertir Decimal a Number
+    const toNumber = (value: any): number => {
+      if (value === null || value === undefined) return 0;
+      if (typeof value === 'number') return value;
+      if (typeof value === 'string') return parseFloat(value) || 0;
+      // Si es un objeto Decimal de Prisma
+      if (value && typeof value.toNumber === 'function') return value.toNumber();
+      return 0;
+    };
+
     // Transformar al formato esperado por el frontend
     const items = episodes.map((e) => ({
-      episodio: e.episodioCmdb,
+      episodio: e.episodioCmdb || '',
       nombre: e.paciente?.nombre || '',
       rut: e.paciente?.rut || '',
-      centro: e.centro,
-      folio: e.numeroFolio,
-      tipoEpisodio: e.tipoEpisodio,
-      fechaIngreso: e.fechaIngreso?.toISOString().split('T')[0],
-      fechaAlta: e.fechaAlta?.toISOString().split('T')[0],
-      servicioAlta: e.servicioAlta,
+      centro: e.centro || '',
+      folio: e.numeroFolio || '',
+      tipoEpisodio: e.tipoEpisodio || '',
+      fechaIngreso: e.fechaIngreso ? e.fechaIngreso.toISOString().split('T')[0] : '',
+      fechaAlta: e.fechaAlta ? e.fechaAlta.toISOString().split('T')[0] : '',
+      servicioAlta: e.servicioAlta || '',
       grdCodigo: e.grd?.codigo || '',
-      peso: e.pesoGrd || 0,
-      montoRN: e.montoRn || 0,
+      peso: toNumber(e.pesoGrd),
+      montoRN: toNumber(e.montoRn),
       inlierOutlier: e.inlierOutlier || '',
     }));
 
@@ -480,9 +506,13 @@ router.get('/episodes/final', requireAuth, async (req: Request, res: Response) =
       pageSize,
       totalPages: Math.ceil(total / pageSize),
     });
-  } catch (error) {
+  } catch (error: any) {
     console.error('Error al obtener episodios finales:', error);
-    return res.status(500).json({ error: 'Error al obtener episodios finales' });
+    console.error('Stack:', error?.stack);
+    return res.status(500).json({ 
+      error: 'Error al obtener episodios finales',
+      message: error?.message || 'Error desconocido'
+    });
   }
 });
 
