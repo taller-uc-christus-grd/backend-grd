@@ -64,35 +64,39 @@ NODE_ENV=production
 - Si Railway tiene un servicio de PostgreSQL, debería crear automáticamente la variable `DATABASE_URL`. Verifica que esté conectado.
 - Si no hay variable `DATABASE_URL`, conecta un servicio de PostgreSQL o crea una base de datos externa y añade la URL manualmente.
 
-### 2. Configurar el Build Command en Railway
+### 2. Configurar Build y Start Commands en Railway
 
-El proyecto ahora incluye un script `deploy` que ejecuta automáticamente:
-1. Las migraciones de Prisma (`prisma migrate deploy`)
-2. La generación de Prisma Client (`prisma generate`)
-3. La compilación de TypeScript (`tsc`)
+**⚠️ IMPORTANTE:** Las migraciones NO se ejecutan durante el build porque la base de datos no está disponible en esa fase. En su lugar, se ejecutan automáticamente al iniciar el servidor.
 
 **Configuración en Railway:**
 
 1. Ve a tu proyecto en Railway → **Settings** → **Deploy**
 2. Configura el **Build Command**:
    ```
-   npm run deploy
+   npm run build
    ```
    
-   Este comando ejecutará automáticamente las migraciones y el build.
+   Este comando generará Prisma Client y compilará TypeScript.
 
-3. Asegúrate de que el **Start Command** sea:
+3. Configura el **Start Command**:
    ```
-   npm start
+   npm run start:prod
    ```
+   
+   Este comando ejecutará automáticamente las migraciones pendientes y luego iniciará el servidor.
 
-**Nota:** Si prefieres ejecutar las migraciones manualmente, puedes usar `npm run build` como Build Command, pero entonces tendrás que ejecutar las migraciones manualmente después de cada deploy (ver opción B abajo).
+**Nota:** Si prefieres ejecutar las migraciones manualmente, puedes usar `npm start` como Start Command, pero entonces tendrás que ejecutar las migraciones manualmente después de cada deploy (ver opción B abajo).
 
 ### 3. Ejecutar Migraciones de Prisma
 
 #### Opción A: Automático (Recomendado) ✅
 
-Si configuraste el Build Command como `npm run deploy` (ver paso 2), las migraciones se ejecutarán automáticamente en cada deploy. **Esta es la opción recomendada.**
+Si configuraste el Start Command como `npm run start:prod` (ver paso 2), las migraciones se ejecutarán automáticamente cada vez que el servidor se inicie. **Esta es la opción recomendada.**
+
+**Cómo funciona:**
+- El script `start:prod` ejecuta `prisma migrate deploy` primero
+- Luego inicia el servidor con `node dist/index.js`
+- Si hay migraciones pendientes, se aplicarán automáticamente antes de iniciar
 
 #### Opción B: Manual
 
@@ -142,7 +146,7 @@ El código ahora incluye:
 1. ✅ **Mejor logging:** El controlador de login ahora registra información detallada sobre los errores
 2. ✅ **Health check mejorado:** El endpoint `/health` verifica la conexión a la base de datos
 3. ✅ **Script postinstall:** Prisma Client se genera automáticamente después de `npm install`
-4. ✅ **Script deploy:** Ejecuta automáticamente migraciones, genera Prisma Client y compila TypeScript
+4. ✅ **Script start:prod:** Ejecuta automáticamente las migraciones antes de iniciar el servidor en producción
 5. ✅ **Manejo de errores mejorado:** Los errores ahora se registran con más detalle para debugging
 
 ## 📝 Checklist de Verificación
@@ -152,10 +156,11 @@ Antes de reportar un problema, verifica:
 - [ ] Variable `DATABASE_URL` está configurada en Railway
 - [ ] Variable `JWT_SECRET` está configurada en Railway
 - [ ] Variable `CORS_ORIGIN` está configurada en Railway
-- [ ] El Build Command en Railway está configurado como `npm run deploy`
+- [ ] El Build Command en Railway está configurado como `npm run build`
+- [ ] El Start Command en Railway está configurado como `npm run start:prod`
 - [ ] El servicio de PostgreSQL está activo en Railway (si aplica)
-- [ ] Las migraciones de Prisma se han ejecutado (automáticamente con `npm run deploy` o manualmente)
-- [ ] Prisma Client está generado (se ejecuta automáticamente con `postinstall` y `deploy`)
+- [ ] Las migraciones de Prisma se han ejecutado (automáticamente con `npm run start:prod` o manualmente)
+- [ ] Prisma Client está generado (se ejecuta automáticamente con `postinstall` y `build`)
 - [ ] El endpoint `/health` muestra `"database": "connected"`
 - [ ] Los logs en Railway no muestran errores de conexión a la base de datos
 
