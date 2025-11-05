@@ -196,10 +196,25 @@ router.post('/catalogs/norma-minsal/import', requireAuth, (req: Request, res: Re
     // Procesar cada fila
     for (let index = 0; index < data.length; index++) {
       const row = data[index];
-      const codigo = row.GRD?.trim();
+      
+      // Buscar el campo GRD de forma flexible (puede venir con diferentes nombres o espacios)
+      let grdValue = row.GRD || row['GRD'] || row['grd'] || row['Grd'];
+      
+      // Si no encontramos GRD, intentar buscar cualquier campo que contenga "GRD"
+      if (!grdValue) {
+        for (const key in row) {
+          if (key.toUpperCase().includes('GRD') || key.toLowerCase().includes('grd')) {
+            grdValue = row[key];
+            break;
+          }
+        }
+      }
+      
+      // Convertir a string y limpiar
+      const codigo = grdValue ? String(grdValue).trim() : null;
 
       // Validar que tenga código GRD
-      if (!codigo) {
+      if (!codigo || codigo === '') {
         errorRecords.push({
           fila: index + 1,
           error: 'Código GRD faltante o vacío',
@@ -208,10 +223,32 @@ router.post('/catalogs/norma-minsal/import', requireAuth, (req: Request, res: Re
         continue;
       }
 
+      // Función auxiliar para buscar columnas de forma flexible
+      const getColumnValue = (possibleNames: string[]): string | undefined => {
+        for (const name of possibleNames) {
+          const value = row[name];
+          if (value !== undefined && value !== null && value !== '') {
+            return String(value);
+          }
+        }
+        // Buscar por nombre parcial (case-insensitive)
+        for (const key in row) {
+          for (const name of possibleNames) {
+            if (key.toLowerCase().includes(name.toLowerCase())) {
+              const value = row[key];
+              if (value !== undefined && value !== null && value !== '') {
+                return String(value);
+              }
+            }
+          }
+        }
+        return undefined;
+      };
+
       // Parsear valores numéricos usando la función auxiliar
-      const peso = parseDecimal(row['Peso Total']);
-      const pci = parseDecimal(row['Punto Corte Inferior']);
-      const pcs = parseDecimal(row['Punto Corte Superior']);
+      const peso = parseDecimal(getColumnValue(['Peso Total', 'Peso', 'PESO TOTAL', 'PESO']));
+      const pci = parseDecimal(getColumnValue(['Punto Corte Inferior', 'Punto Corte Inf', 'PCI', 'Punto Corte Inferior (días)']));
+      const pcs = parseDecimal(getColumnValue(['Punto Corte Superior', 'Punto Corte Sup', 'PCS', 'Punto Corte Superior (días)']));
 
       // Validar que los valores numéricos sean válidos (al menos uno debe ser mayor a 0)
       if (peso === 0 && pci === 0 && pcs === 0) {
