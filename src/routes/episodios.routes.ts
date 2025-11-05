@@ -94,6 +94,94 @@ router.get('/episodios', requireAuth, async (_req: Request, res: Response) => {
   }
 });
 
+// Endpoint para obtener metadata de episodios
+router.get('/episodios/meta', requireAuth, async (_req: Request, res: Response) => {
+  try {
+    const count = await prisma.episodio.count();
+    const lastEpisode = await prisma.episodio.findFirst({
+      orderBy: { createdAt: 'desc' },
+      select: { createdAt: true },
+    });
+    
+    return res.json({
+      count,
+      lastImportedAt: lastEpisode?.createdAt ? lastEpisode.createdAt.toISOString() : null,
+    });
+  } catch (error: any) {
+    console.error('Error al obtener metadata:', error);
+    console.error('Stack:', error?.stack);
+    return res.status(500).json({ 
+      error: 'Error al obtener metadata',
+      message: error?.message || 'Error desconocido'
+    });
+  }
+});
+
+// Endpoint para obtener episodios finales (con paginación)
+router.get('/episodios/final', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const page = parseInt(req.query.page as string) || 1;
+    const pageSize = parseInt(req.query.pageSize as string) || 10;
+    const skip = (page - 1) * pageSize;
+
+    const [episodes, total] = await Promise.all([
+      prisma.episodio.findMany({
+        skip,
+        take: pageSize,
+        include: {
+          paciente: true,
+          grd: true,
+        },
+      orderBy: {
+        id: 'desc',
+      },
+      }),
+      prisma.episodio.count(),
+    ]);
+
+    // Helper para convertir Decimal a Number
+    const toNumber = (value: any): number => {
+      if (value === null || value === undefined) return 0;
+      if (typeof value === 'number') return value;
+      if (typeof value === 'string') return parseFloat(value) || 0;
+      if (value && typeof value.toNumber === 'function') return value.toNumber();
+      return 0;
+    };
+
+    // Transformar al formato esperado por el frontend
+    const items = episodes.map((e) => ({
+      episodio: e.episodioCmdb || '',
+      nombre: e.paciente?.nombre || '',
+      rut: e.paciente?.rut || '',
+      centro: e.centro || '',
+      folio: e.numeroFolio || '',
+      tipoEpisodio: e.tipoEpisodio || '',
+      fechaIngreso: e.fechaIngreso ? e.fechaIngreso.toISOString().split('T')[0] : '',
+      fechaAlta: e.fechaAlta ? e.fechaAlta.toISOString().split('T')[0] : '',
+      servicioAlta: e.servicioAlta || '',
+      grdCodigo: e.grd?.codigo || '',
+      peso: toNumber(e.pesoGrd),
+      montoRN: toNumber(e.montoRn),
+      inlierOutlier: e.inlierOutlier || '',
+    }));
+
+    return res.json({
+      items,
+      total,
+      page,
+      pageSize,
+      totalPages: Math.ceil(total / pageSize),
+    });
+  } catch (error: any) {
+    console.error('Error al obtener episodios finales:', error);
+    console.error('Stack:', error?.stack);
+    return res.status(500).json({ 
+      error: 'Error al obtener episodios finales',
+      message: error?.message || 'Error desconocido'
+    });
+  }
+});
+
 // Obtener episodio por id (AHORA DESDE PRISMA)
 router.get('/episodios/:id', requireAuth, async (req: Request, res: Response) => {
   try {
@@ -474,94 +562,6 @@ router.post('/episodios/import', requireAuth, upload.single('file'), async (req:
       error: 'Error interno del servidor',
       message: error?.message || 'Error procesando archivo',
       details: process.env.NODE_ENV === 'development' ? error?.stack : undefined
-    });
-  }
-});
-
-// Endpoint para obtener metadata de episodios
-router.get('/episodios/meta', requireAuth, async (_req: Request, res: Response) => {
-  try {
-    const count = await prisma.episodio.count();
-    const lastEpisode = await prisma.episodio.findFirst({
-      orderBy: { createdAt: 'desc' },
-      select: { createdAt: true },
-    });
-    
-    return res.json({
-      count,
-      lastImportedAt: lastEpisode?.createdAt ? lastEpisode.createdAt.toISOString() : null,
-    });
-  } catch (error: any) {
-    console.error('Error al obtener metadata:', error);
-    console.error('Stack:', error?.stack);
-    return res.status(500).json({ 
-      error: 'Error al obtener metadata',
-      message: error?.message || 'Error desconocido'
-    });
-  }
-});
-
-// Endpoint para obtener episodios finales (con paginación)
-router.get('/episodios/final', requireAuth, async (req: Request, res: Response) => {
-  try {
-    const page = parseInt(req.query.page as string) || 1;
-    const pageSize = parseInt(req.query.pageSize as string) || 10;
-    const skip = (page - 1) * pageSize;
-
-    const [episodes, total] = await Promise.all([
-      prisma.episodio.findMany({
-        skip,
-        take: pageSize,
-        include: {
-          paciente: true,
-          grd: true,
-        },
-      orderBy: {
-        id: 'desc',
-      },
-      }),
-      prisma.episodio.count(),
-    ]);
-
-    // Helper para convertir Decimal a Number
-    const toNumber = (value: any): number => {
-      if (value === null || value === undefined) return 0;
-      if (typeof value === 'number') return value;
-      if (typeof value === 'string') return parseFloat(value) || 0;
-      if (value && typeof value.toNumber === 'function') return value.toNumber();
-      return 0;
-    };
-
-    // Transformar al formato esperado por el frontend
-    const items = episodes.map((e) => ({
-      episodio: e.episodioCmdb || '',
-      nombre: e.paciente?.nombre || '',
-      rut: e.paciente?.rut || '',
-      centro: e.centro || '',
-      folio: e.numeroFolio || '',
-      tipoEpisodio: e.tipoEpisodio || '',
-      fechaIngreso: e.fechaIngreso ? e.fechaIngreso.toISOString().split('T')[0] : '',
-      fechaAlta: e.fechaAlta ? e.fechaAlta.toISOString().split('T')[0] : '',
-      servicioAlta: e.servicioAlta || '',
-      grdCodigo: e.grd?.codigo || '',
-      peso: toNumber(e.pesoGrd),
-      montoRN: toNumber(e.montoRn),
-      inlierOutlier: e.inlierOutlier || '',
-    }));
-
-    return res.json({
-      items,
-      total,
-      page,
-      pageSize,
-      totalPages: Math.ceil(total / pageSize),
-    });
-  } catch (error: any) {
-    console.error('Error al obtener episodios finales:', error);
-    console.error('Stack:', error?.stack);
-    return res.status(500).json({ 
-      error: 'Error al obtener episodios finales',
-      message: error?.message || 'Error desconocido'
     });
   }
 });
