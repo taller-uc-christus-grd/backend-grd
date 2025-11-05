@@ -53,6 +53,13 @@ function parseDecimal(value: string | undefined, defaultValue: number = 0): numb
   return isNaN(parsed) ? defaultValue : parsed;
 }
 
+// Wrapper para manejar errores en handlers async
+const asyncHandler = (fn: Function) => {
+  return (req: Request, res: Response, next: NextFunction) => {
+    Promise.resolve(fn(req, res, next)).catch(next);
+  };
+};
+
 // Middleware para manejar errores de Multer
 const handleMulterError = (err: any, req: Request, res: Response, next: NextFunction) => {
   if (err instanceof multer.MulterError) {
@@ -84,7 +91,7 @@ const handleMulterError = (err: any, req: Request, res: Response, next: NextFunc
 };
 
 // Endpoint GET para obtener información sobre la Norma Minsal
-router.get('/catalogs/norma-minsal', requireAuth, async (req: Request, res: Response) => {
+router.get('/catalogs/norma-minsal', requireAuth, asyncHandler(async (req: Request, res: Response) => {
   try {
     const count = await prisma.grd.count();
     const latestUpdate = await prisma.grd.findFirst({
@@ -105,7 +112,7 @@ router.get('/catalogs/norma-minsal', requireAuth, async (req: Request, res: Resp
       message: error?.message || 'Error desconocido'
     });
   }
-});
+}));
 
 // Endpoint de importación de Norma Minsal
 // Ruta completa: POST /api/catalogs/norma-minsal/import
@@ -124,7 +131,7 @@ router.post('/catalogs/norma-minsal/import', requireAuth, (req: Request, res: Re
     console.log('✅ Archivo procesado por Multer correctamente');
     next();
   });
-}, async (req: Request, res: Response, next: NextFunction) => {
+}, asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
   const errorRecords: any[] = [];
   const successRecords: any[] = [];
 
@@ -325,7 +332,7 @@ router.post('/catalogs/norma-minsal/import', requireAuth, (req: Request, res: Re
     // Si ya se envió respuesta, pasar el error al error handler global
     next(error);
   }
-});
+}));
 
 export default router;
 
