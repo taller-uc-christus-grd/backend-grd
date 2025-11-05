@@ -5,7 +5,7 @@ import * as path from 'path';
 // import * as fs from 'fs'; // No se necesita para memoryStorage
 import csv from 'csv-parser';
 import * as XLSX from 'xlsx';
-import { requireAuth } from '../middlewares/auth';
+import { requireAuth, requireRole } from '../middlewares/auth';
 import { prisma } from '../db/client'; // ¡Importante! Conecta con la DB
 import { Readable } from 'stream';
 
@@ -36,6 +36,26 @@ const upload = multer({
   limits: { fileSize: 50 * 1024 * 1024, files: 1 }, // 50MB Límite
 });
 
+// Mapeo de campos del frontend a la base de datos
+const fieldMapping: Record<string, string> = {
+  estadoRN: 'estadoRn',
+  montoAT: 'montoAt',
+  montoRN: 'montoRn',
+  pagoDemora: 'pagoDemoraRescate',
+  pagoOutlierSup: 'pagoOutlierSuperior',
+  at: 'atSn', // 'at' del frontend se mapea a 'atSn' en la BD
+};
+
+// Función para mapear campos del frontend a la base de datos
+function mapFieldsToDB(data: any): any {
+  const mapped: any = {};
+  for (const [key, value] of Object.entries(data)) {
+    const dbKey = fieldMapping[key] || key;
+    mapped[dbKey] = value;
+  }
+  return mapped;
+}
+
 // Esquema Joi para validación (lo mantenemos)
 const episodioSchema = Joi.object({
   centro: Joi.string().optional().allow(null),
@@ -47,15 +67,22 @@ const episodioSchema = Joi.object({
   fechaAlta: Joi.date().optional().allow(null),
   servicioAlta: Joi.string().optional().allow(null),
   estadoRn: Joi.string().optional().allow(null),
+  // Campos del frontend (camelCase con mayúsculas)
+  estadoRN: Joi.string().optional().allow(null), // Alias para estadoRn
   atSn: Joi.boolean().optional().allow(null),
+  at: Joi.boolean().optional().allow(null), // Alias para atSn
   atDetalle: Joi.string().optional().allow(null),
   montoAt: Joi.number().optional().allow(null),
+  montoAT: Joi.number().optional().allow(null), // Alias para montoAt
   tipoAlta: Joi.string().optional().allow(null),
   pesoGrd: Joi.number().optional().allow(null),
   montoRn: Joi.number().optional().allow(null),
+  montoRN: Joi.number().optional().allow(null), // Alias para montoRn
   diasDemoraRescate: Joi.number().integer().optional().allow(null),
   pagoDemoraRescate: Joi.number().optional().allow(null),
+  pagoDemora: Joi.number().optional().allow(null), // Alias para pagoDemoraRescate
   pagoOutlierSuperior: Joi.number().optional().allow(null),
+  pagoOutlierSup: Joi.number().optional().allow(null), // Alias para pagoOutlierSuperior
   documentacion: Joi.object().optional().allow(null), // Asumiendo JSON
   inlierOutlier: Joi.string().optional().allow(null),
   grupoEnNorma: Joi.boolean().optional().allow(null),
@@ -182,7 +209,7 @@ router.get('/episodios/final', requireAuth, async (req: Request, res: Response) 
   }
 });
 
-// Obtener episodio por id (AHORA DESDE PRISMA)
+// Obtener episodio por id (AHORA DESDE PRISMA) - Soporta ID numérico o episodioCmdb
 router.get('/episodios/:id', requireAuth, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
@@ -191,20 +218,33 @@ router.get('/episodios/:id', requireAuth, async (req: Request, res: Response) =>
       return res.status(400).json({ error: 'ID es requerido' });
     }
     
+    // Intentar buscar por ID numérico o por episodioCmdb
     const idNum = parseInt(id);
-    if (isNaN(idNum)) {
-      return res.status(400).json({ error: 'ID inválido' });
-    }
+    let episodio;
     
-    const episodio = await prisma.episodio.findUnique({
-      where: { id: idNum },
-      include: {
-        paciente: true,
-        grd: true,
-        diagnosticos: true, // Incluye diagnósticos asociados
-        respaldos: true, // Incluye respaldos asociados
-      },
-    });
+    if (isNaN(idNum)) {
+      // Buscar por episodioCmdb (string) - usar findFirst porque no es único
+      episodio = await prisma.episodio.findFirst({
+        where: { episodioCmdb: id },
+        include: {
+          paciente: true,
+          grd: true,
+          diagnosticos: true,
+          respaldos: true,
+        },
+      });
+    } else {
+      // Buscar por ID numérico (único)
+      episodio = await prisma.episodio.findUnique({
+        where: { id: idNum },
+        include: {
+          paciente: true,
+          grd: true,
+          diagnosticos: true,
+          respaldos: true,
+        },
+      });
+    }
 
     if (!episodio) {
       return res.status(404).json({ error: 'Episodio no encontrado' });
@@ -245,7 +285,7 @@ router.post('/episodios', requireAuth, async (req: Request, res: Response) => {
   }
 });
 
-// Actualizar episodio (AHORA EN PRISMA)
+// Actualizar episodio (AHORA EN PRISMA) - PUT para actualización completa
 router.put('/episodios/:id', requireAuth, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
@@ -260,9 +300,45 @@ router.put('/episodios/:id', requireAuth, async (req: Request, res: Response) =>
       });
     }
 
+    // Intentar buscar por ID numérico o por episodioCmdb
+    const idNum = parseInt(id);
+    let episodioId: number;
+
+    if (isNaN(idNum)) {
+      // Buscar por episodioCmdb (string) - obtener el ID primero
+      const existing = await prisma.episodio.findFirst({
+        where: { episodioCmdb: id },
+        select: { id: true },
+      });
+      
+      if (!existing) {
+        return res.status(404).json({ error: 'Episodio no encontrado' });
+      }
+      
+      episodioId = existing.id;
+    } else {
+      // Verificar que existe el ID numérico
+      const existing = await prisma.episodio.findUnique({
+        where: { id: idNum },
+        select: { id: true },
+      });
+      
+      if (!existing) {
+        return res.status(404).json({ error: 'Episodio no encontrado' });
+      }
+      
+      episodioId = idNum;
+    }
+
     const updated = await prisma.episodio.update({
-      where: { id: parseInt(id) },
+      where: { id: episodioId },
       data: value,
+      include: {
+        paciente: true,
+        grd: true,
+        diagnosticos: true,
+        respaldos: true,
+      },
     });
 
     res.json({ success: true, data: updated });
@@ -272,6 +348,257 @@ router.put('/episodios/:id', requireAuth, async (req: Request, res: Response) =>
     }
     console.error(error);
     res.status(500).json({ error: 'Error al actualizar episodio' });
+  }
+});
+
+// Esquema de validación específico para campos de finanzas (PATCH)
+// Validamos con nombres del frontend, luego mapeamos a nombres de BD
+const finanzasSchema = Joi.object({
+  estadoRN: Joi.string().valid('Aprobado', 'Pendiente', 'Rechazado').allow(null).optional(),
+  at: Joi.boolean().optional(),
+  atDetalle: Joi.string().allow(null, '').optional(),
+  montoAT: Joi.number().min(0).optional(),
+  montoRN: Joi.number().min(0).optional(),
+  diasDemoraRescate: Joi.number().integer().min(0).optional(),
+  pagoDemora: Joi.number().min(0).allow(null).optional(),
+  pagoOutlierSup: Joi.number().min(0).allow(null).optional(),
+  precioBaseTramo: Joi.number().min(0).optional(),
+  valorGRD: Joi.number().min(0).optional(),
+  montoFinal: Joi.number().min(0).optional(), // Se ignora, se calcula automáticamente
+  documentacion: Joi.string().allow(null, '').optional(),
+}).unknown(false); // No permitir campos desconocidos
+
+// Mapeo completo de campos del frontend a la base de datos para finanzas
+const finanzasFieldMapping: Record<string, string> = {
+  estadoRN: 'estadoRn',
+  at: 'atSn',
+  montoAT: 'montoAt',
+  montoRN: 'montoRn',
+  pagoDemora: 'pagoDemoraRescate',
+  pagoOutlierSup: 'pagoOutlierSuperior',
+  valorGRD: 'valorGrd',
+};
+
+// Función para calcular montoFinal según la fórmula de negocio
+function calcularMontoFinal(
+  valorGRD: number | null | undefined,
+  montoAT: number | null | undefined,
+  pagoOutlierSup: number | null | undefined,
+  pagoDemora: number | null | undefined
+): number {
+  const vGRD = valorGRD ?? 0;
+  const mAT = montoAT ?? 0;
+  const pOutlier = pagoOutlierSup ?? 0;
+  const pDemora = pagoDemora ?? 0;
+  
+  return vGRD + mAT + pOutlier + pDemora;
+}
+
+// Actualizar episodio parcialmente (PATCH) - Funcionalidad de Finanzas
+router.patch('/episodios/:id', requireAuth, requireRole(['finanzas', 'FINANZAS']), async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    
+    // Validar campos según esquema de finanzas (con nombres del frontend)
+    const { error, value: validatedValue } = finanzasSchema.validate(req.body, {
+      stripUnknown: true,
+      abortEarly: false,
+      presence: 'optional',
+    });
+    
+    if (error) {
+      const errorDetails = error.details.map((d: Joi.ValidationErrorItem) => {
+        // Mensajes más descriptivos
+        if (d.path[0] === 'estadoRN') {
+          return 'Estado inválido. Use: Aprobado, Pendiente o Rechazado';
+        }
+        if (d.type === 'number.min') {
+          return `${d.path[0]} debe ser mayor o igual a 0`;
+        }
+        return d.message;
+      });
+      
+      return res.status(400).json({
+        message: errorDetails[0] || 'Datos inválidos',
+        error: 'ValidationError',
+        field: error.details[0]?.path[0] || 'unknown',
+      });
+    }
+
+    // Si no hay campos para actualizar, retornar error
+    if (Object.keys(validatedValue).length === 0) {
+      return res.status(400).json({ 
+        message: 'No se proporcionaron campos para actualizar',
+        error: 'ValidationError'
+      });
+    }
+
+    // Mapear campos del frontend a nombres de la base de datos
+    const updateData: any = {};
+    for (const [key, value] of Object.entries(validatedValue)) {
+      const dbKey = finanzasFieldMapping[key] || key;
+      updateData[dbKey] = value;
+    }
+
+    // IGNORAR montoFinal si viene en el request (se calculará automáticamente)
+    delete updateData.montoFinal;
+
+    // Validaciones de reglas de negocio
+    // Si at === false, atDetalle debe ser null
+    if (updateData.atSn === false && updateData.atDetalle !== undefined) {
+      updateData.atDetalle = null;
+    }
+
+    // Manejar documentacion: Prisma espera Json (objeto/array), no string
+    // Si el frontend envía un string, intentar parsearlo como JSON
+    if (updateData.documentacion !== undefined && updateData.documentacion !== null) {
+      if (typeof updateData.documentacion === 'string') {
+        // Si es string vacío, convertir a null
+        if (updateData.documentacion.trim() === '') {
+          updateData.documentacion = null;
+        } else {
+          // Intentar parsear el string como JSON
+          try {
+            updateData.documentacion = JSON.parse(updateData.documentacion);
+          } catch {
+            // Si no es JSON válido, guardarlo como objeto con el texto
+            updateData.documentacion = { texto: updateData.documentacion };
+          }
+        }
+      }
+      // Si ya es objeto/array, dejarlo así
+    }
+
+    // Buscar episodio por ID numérico o por episodioCmdb
+    const idNum = parseInt(id);
+    let episodio;
+
+    if (isNaN(idNum)) {
+      // Buscar por episodioCmdb (string)
+      episodio = await prisma.episodio.findFirst({
+        where: { episodioCmdb: id },
+        include: {
+          paciente: true,
+          grd: true,
+          diagnosticos: true,
+          respaldos: true,
+        },
+      });
+    } else {
+      // Buscar por ID numérico
+      episodio = await prisma.episodio.findUnique({
+        where: { id: idNum },
+        include: {
+          paciente: true,
+          grd: true,
+          diagnosticos: true,
+          respaldos: true,
+        },
+      });
+    }
+
+    if (!episodio) {
+      return res.status(404).json({
+        message: `El episodio ${id} no fue encontrado`,
+        error: 'NotFound'
+      });
+    }
+
+    // Obtener valores actuales para calcular montoFinal
+    const valorGRDActual = episodio.valorGrd ? Number(episodio.valorGrd) : 0;
+    const montoATActual = episodio.montoAt ? Number(episodio.montoAt) : 0;
+    const pagoOutlierSupActual = episodio.pagoOutlierSuperior ? Number(episodio.pagoOutlierSuperior) : 0;
+    const pagoDemoraActual = episodio.pagoDemoraRescate ? Number(episodio.pagoDemoraRescate) : 0;
+
+    // Usar valores nuevos si vienen en el request, sino usar los actuales
+    // Si viene null explícitamente, usar 0 para el cálculo (pero guardar null en BD)
+    const valorGRD = updateData.valorGrd !== undefined ? (updateData.valorGrd ?? 0) : valorGRDActual;
+    const montoAT = updateData.montoAt !== undefined ? (updateData.montoAt ?? 0) : montoATActual;
+    const pagoOutlierSup = updateData.pagoOutlierSuperior !== undefined ? (updateData.pagoOutlierSuperior ?? 0) : pagoOutlierSupActual;
+    const pagoDemora = updateData.pagoDemoraRescate !== undefined ? (updateData.pagoDemoraRescate ?? 0) : pagoDemoraActual;
+
+    // Calcular montoFinal automáticamente
+    const montoFinalCalculado = calcularMontoFinal(
+      valorGRD,
+      montoAT,
+      pagoOutlierSup,
+      pagoDemora
+    );
+
+    // Agregar montoFinal calculado a los datos de actualización
+    updateData.montoFinal = montoFinalCalculado;
+
+    // Actualizar el episodio
+    const updated = await prisma.episodio.update({
+      where: { id: episodio.id },
+      data: updateData,
+      include: {
+        paciente: true,
+        grd: true,
+        diagnosticos: true,
+        respaldos: true,
+      },
+    });
+
+    // Formatear respuesta según especificaciones
+    const response = {
+      episodio: updated.episodioCmdb || '',
+      rut: updated.paciente?.rut || '',
+      nombre: updated.paciente?.nombre || '',
+      fechaIngreso: updated.fechaIngreso ? updated.fechaIngreso.toISOString().split('T')[0] : null,
+      fechaAlta: updated.fechaAlta ? updated.fechaAlta.toISOString().split('T')[0] : null,
+      servicioAlta: updated.servicioAlta || '',
+      
+      // Campos editables por finanzas
+      estadoRN: updated.estadoRn,
+      at: updated.atSn,
+      atDetalle: updated.atDetalle,
+      montoAT: updated.montoAt ? Number(updated.montoAt) : null,
+      montoRN: updated.montoRn ? Number(updated.montoRn) : null,
+      diasDemoraRescate: updated.diasDemoraRescate,
+      pagoDemora: updated.pagoDemoraRescate ? Number(updated.pagoDemoraRescate) : null,
+      pagoOutlierSup: updated.pagoOutlierSuperior ? Number(updated.pagoOutlierSuperior) : null,
+      precioBaseTramo: updated.precioBaseTramo ? Number(updated.precioBaseTramo) : null,
+      valorGRD: updated.valorGrd ? Number(updated.valorGrd) : null,
+      montoFinal: updated.montoFinal ? Number(updated.montoFinal) : null,
+      documentacion: updated.documentacion 
+        ? (typeof updated.documentacion === 'string' 
+            ? updated.documentacion 
+            : (typeof updated.documentacion === 'object' && updated.documentacion !== null
+                ? ('texto' in updated.documentacion 
+                    ? updated.documentacion.texto as string
+                    : JSON.stringify(updated.documentacion))
+                : String(updated.documentacion)))
+        : null,
+      
+      // Campos de solo lectura
+      grdCodigo: updated.grd?.codigo || '',
+      peso: updated.pesoGrd ? Number(updated.pesoGrd) : null,
+      inlierOutlier: updated.inlierOutlier || '',
+      grupoDentroNorma: updated.grupoEnNorma,
+      diasEstada: updated.diasEstada,
+      
+      // Otros campos del episodio
+      centro: updated.centro,
+      numeroFolio: updated.numeroFolio,
+      tipoEpisodio: updated.tipoEpisodio,
+      id: updated.id,
+    };
+
+    res.json(response);
+  } catch (error: any) {
+    if (error.code === 'P2025') {
+      return res.status(404).json({
+        message: `El episodio ${req.params.id} no fue encontrado`,
+        error: 'NotFound'
+      });
+    }
+    console.error('Error al actualizar episodio:', error);
+    console.error('Stack:', error?.stack);
+    res.status(500).json({
+      message: 'Error del servidor. Por favor, intenta nuevamente más tarde.',
+      error: 'InternalServerError'
+    });
   }
 });
 
