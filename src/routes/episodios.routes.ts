@@ -492,10 +492,8 @@ const finanzasSchema = Joi.object({
     Joi.number().min(0),
     Joi.string().pattern(/^\d+(\.\d+)?$/).min(0)
   ).optional(),
-  valorGRD: Joi.alternatives().try(
-    Joi.number().min(0),
-    Joi.string().pattern(/^\d+(\.\d+)?$/).min(0)
-  ).optional(),
+  // valorGRD NO es editable - se calcula automáticamente como peso * precioBaseTramo
+  // Se ignora si viene en el request
   montoFinal: Joi.alternatives().try(
     Joi.number().min(0),
     Joi.string().pattern(/^\d+(\.\d+)?$/).min(0)
@@ -504,6 +502,7 @@ const finanzasSchema = Joi.object({
 }).unknown(false); // No permitir campos desconocidos
 
 // Mapeo completo de campos del frontend a la base de datos para finanzas
+// NOTA: valorGRD NO está en el mapeo porque NO es editable (se calcula automáticamente)
 const finanzasFieldMapping: Record<string, string> = {
   estadoRN: 'estadoRn',
   at: 'atSn',
@@ -511,8 +510,23 @@ const finanzasFieldMapping: Record<string, string> = {
   montoRN: 'montoRn',
   pagoDemora: 'pagoDemoraRescate',
   pagoOutlierSup: 'pagoOutlierSuperior',
-  valorGRD: 'valorGrd',
+  // valorGRD: NO editable, se calcula automáticamente
 };
+
+// Función para calcular valorGRD como peso * precioBaseTramo
+function calcularValorGRD(
+  peso: number | null | undefined,
+  precioBaseTramo: number | null | undefined
+): number {
+  const pesoNum = peso ?? 0;
+  const precioNum = precioBaseTramo ?? 0;
+  
+  if (pesoNum === 0 || precioNum === 0) {
+    return 0;
+  }
+  
+  return pesoNum * precioNum;
+}
 
 // Función para calcular montoFinal según la fórmula de negocio
 function calcularMontoFinal(
@@ -534,8 +548,12 @@ router.patch('/episodios/:id', requireAuth, requireRole(['finanzas', 'FINANZAS']
   try {
     const { id } = req.params;
     
+    // Ignorar valorGRD si viene en el request (se calculará automáticamente)
+    const requestBody = { ...req.body };
+    delete requestBody.valorGRD;
+    
     // Validar campos según esquema de finanzas (con nombres del frontend)
-    const { error, value: validatedValue } = finanzasSchema.validate(req.body, {
+    const { error, value: validatedValue } = finanzasSchema.validate(requestBody, {
       stripUnknown: true,
       abortEarly: false,
       presence: 'optional',
@@ -588,7 +606,8 @@ router.patch('/episodios/:id', requireAuth, requireRole(['finanzas', 'FINANZAS']
         } else {
           updateData.estadoRn = null;
         }
-      } else if (key.match(/^(montoAT|montoRN|pagoDemora|pagoOutlierSup|precioBaseTramo|valorGRD|montoFinal|diasDemoraRescate)$/i)) {
+      } else if (key.match(/^(montoAT|montoRN|pagoDemora|pagoOutlierSup|precioBaseTramo|montoFinal|diasDemoraRescate)$/i)) {
+        // valorGRD NO debe procesarse aquí - se ignora y se calcula después
         // Convertir strings numéricos a números (si es string)
         // Si ya es número, dejarlo como está
         if (typeof value === 'string') {
@@ -610,8 +629,9 @@ router.patch('/episodios/:id', requireAuth, requireRole(['finanzas', 'FINANZAS']
       }
     }
 
-    // IGNORAR montoFinal si viene en el request (se calculará automáticamente)
+    // IGNORAR montoFinal y valorGRD si vienen en el request (se calcularán automáticamente)
     delete updateData.montoFinal;
+    delete updateData.valorGrd; // valorGRD NO es editable, siempre se calcula
 
     // Validaciones de reglas de negocio
     // Si at === false, atDetalle debe ser null
@@ -690,28 +710,34 @@ router.patch('/episodios/:id', requireAuth, requireRole(['finanzas', 'FINANZAS']
       console.log(`   - episodioCmdb: ${episodio.episodioCmdb}`);
     }
 
-    // Obtener valores actuales para calcular montoFinal
-    const valorGRDActual = episodio.valorGrd ? Number(episodio.valorGrd) : 0;
+    // Obtener valores actuales del episodio
+    const pesoActual = episodio.pesoGrd ? Number(episodio.pesoGrd) : 0;
+    const precioBaseTramoActual = episodio.precioBaseTramo ? Number(episodio.precioBaseTramo) : 0;
     const montoATActual = episodio.montoAt ? Number(episodio.montoAt) : 0;
     const pagoOutlierSupActual = episodio.pagoOutlierSuperior ? Number(episodio.pagoOutlierSuperior) : 0;
     const pagoDemoraActual = episodio.pagoDemoraRescate ? Number(episodio.pagoDemoraRescate) : 0;
 
     // Usar valores nuevos si vienen en el request, sino usar los actuales
     // Si viene null explícitamente, usar 0 para el cálculo (pero guardar null en BD)
-    const valorGRD = updateData.valorGrd !== undefined ? (updateData.valorGrd ?? 0) : valorGRDActual;
+    // NOTA: pesoGrd NO es editable por finanzas, siempre usar el valor actual
+    const peso = pesoActual;
+    const precioBaseTramo = updateData.precioBaseTramo !== undefined ? (updateData.precioBaseTramo ?? 0) : precioBaseTramoActual;
     const montoAT = updateData.montoAt !== undefined ? (updateData.montoAt ?? 0) : montoATActual;
     const pagoOutlierSup = updateData.pagoOutlierSuperior !== undefined ? (updateData.pagoOutlierSuperior ?? 0) : pagoOutlierSupActual;
     const pagoDemora = updateData.pagoDemoraRescate !== undefined ? (updateData.pagoDemoraRescate ?? 0) : pagoDemoraActual;
 
-    // Calcular montoFinal automáticamente
+    // PASO 1: SIEMPRE recalcular valorGRD = peso * precioBaseTramo
+    // (ignorar cualquier valor que haya venido en el request)
+    const valorGRDCalculado = calcularValorGRD(peso, precioBaseTramo);
+    updateData.valorGrd = valorGRDCalculado;
+
+    // PASO 2: Calcular montoFinal usando el valorGRD calculado
     const montoFinalCalculado = calcularMontoFinal(
-      valorGRD,
+      valorGRDCalculado,
       montoAT,
       pagoOutlierSup,
       pagoDemora
     );
-
-    // Agregar montoFinal calculado a los datos de actualización
     updateData.montoFinal = montoFinalCalculado;
 
     // Actualizar el episodio
