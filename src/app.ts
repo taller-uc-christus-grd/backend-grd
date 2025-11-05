@@ -9,6 +9,7 @@ import exportRoutes from './routes/export.routes';
 import uploadRoutes from './routes/upload.routes';
 import episodiosRoutes from './routes/episodios.routes';
 import respaldosRoutes from './routes/respaldos.routes';
+import catalogsRoutes from './routes/catalogs.routes';
 import { errorHandler } from './middlewares/error';
 import { prisma } from './db/client';
 
@@ -114,6 +115,7 @@ app.use('/api', exportRoutes);
 app.use('/api', uploadRoutes);
 app.use('/api', episodiosRoutes);
 app.use('/api', respaldosRoutes);
+app.use('/api', catalogsRoutes); // Rutas de catálogos: /api/catalogs/norma-minsal/import
 
 // 404 handler
 app.use((req, res) => {
