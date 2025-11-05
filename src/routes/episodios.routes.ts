@@ -72,7 +72,7 @@ const episodioSchema = Joi.object({
 });
 
 // Listar episodios (AHORA DESDE PRISMA)
-router.get('/episodes', requireAuth, async (_req: Request, res: Response) => {
+router.get('/episodios', requireAuth, async (_req: Request, res: Response) => {
   try {
     const episodios = await prisma.episodio.findMany({
       include: {
@@ -95,7 +95,7 @@ router.get('/episodes', requireAuth, async (_req: Request, res: Response) => {
 });
 
 // Obtener episodio por id (AHORA DESDE PRISMA)
-router.get('/episodes/:id', requireAuth, async (req: Request, res: Response) => {
+router.get('/episodios/:id', requireAuth, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     
@@ -133,7 +133,7 @@ router.get('/episodes/:id', requireAuth, async (req: Request, res: Response) => 
 });
 
 // Crear episodio (AHORA EN PRISMA)
-router.post('/episodes', requireAuth, async (req: Request, res: Response) => {
+router.post('/episodios', requireAuth, async (req: Request, res: Response) => {
   try {
     const { error, value } = episodioSchema.validate(req.body, {
       stripUnknown: true,
@@ -158,7 +158,7 @@ router.post('/episodes', requireAuth, async (req: Request, res: Response) => {
 });
 
 // Actualizar episodio (AHORA EN PRISMA)
-router.put('/episodes/:id', requireAuth, async (req: Request, res: Response) => {
+router.put('/episodios/:id', requireAuth, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const { error, value } = episodioSchema.validate(req.body, {
@@ -188,7 +188,7 @@ router.put('/episodes/:id', requireAuth, async (req: Request, res: Response) => 
 });
 
 // Eliminar episodio (AHORA EN PRISMA)
-router.delete('/episodes/:id', requireAuth, async (req: Request, res: Response) => {
+router.delete('/episodios/:id', requireAuth, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     await prisma.episodio.delete({
@@ -355,7 +355,7 @@ async function processRow(row: RawRow) {
 }
 
 // Endpoint de importación de episodios (formato esperado por el frontend)
-router.post('/episodes/import', requireAuth, upload.single('file'), async (req: Request, res: Response) => {
+router.post('/episodios/import', requireAuth, upload.single('file'), async (req: Request, res: Response) => {
   const errorRecords: any[] = [];
   const validRecords: RawRow[] = [];
 
@@ -479,7 +479,7 @@ router.post('/episodes/import', requireAuth, upload.single('file'), async (req: 
 });
 
 // Endpoint para obtener metadata de episodios
-router.get('/episodes/meta', requireAuth, async (_req: Request, res: Response) => {
+router.get('/episodios/meta', requireAuth, async (_req: Request, res: Response) => {
   try {
     const count = await prisma.episodio.count();
     const lastEpisode = await prisma.episodio.findFirst({
@@ -502,7 +502,7 @@ router.get('/episodes/meta', requireAuth, async (_req: Request, res: Response) =
 });
 
 // Endpoint para obtener episodios finales (con paginación)
-router.get('/episodes/final', requireAuth, async (req: Request, res: Response) => {
+router.get('/episodios/final', requireAuth, async (req: Request, res: Response) => {
   try {
     const page = parseInt(req.query.page as string) || 1;
     const pageSize = parseInt(req.query.pageSize as string) || 10;
