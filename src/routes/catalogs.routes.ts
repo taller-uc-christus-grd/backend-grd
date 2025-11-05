@@ -1,4 +1,4 @@
-import { Router, Request, Response } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
 import multer from 'multer';
 import * as path from 'path';
 import csv from 'csv-parser';
@@ -53,9 +53,54 @@ function parseDecimal(value: string | undefined, defaultValue: number = 0): numb
   return isNaN(parsed) ? defaultValue : parsed;
 }
 
+// Middleware para manejar errores de Multer
+const handleMulterError = (err: any, req: Request, res: Response, next: NextFunction) => {
+  if (err instanceof multer.MulterError) {
+    if (err.code === 'LIMIT_FILE_SIZE') {
+      return res.status(400).json({ 
+        error: 'Archivo demasiado grande', 
+        message: 'El archivo excede el tamaño máximo permitido (50MB)' 
+      });
+    }
+    if (err.code === 'LIMIT_FILE_COUNT') {
+      return res.status(400).json({ 
+        error: 'Demasiados archivos', 
+        message: 'Solo se permite un archivo a la vez' 
+      });
+    }
+    return res.status(400).json({ 
+      error: 'Error al procesar el archivo', 
+      message: err.message 
+    });
+  }
+  if (err) {
+    // Error del fileFilter u otro error de Multer
+    return res.status(400).json({ 
+      error: 'Error al procesar el archivo', 
+      message: err.message || 'Tipo de archivo no permitido' 
+    });
+  }
+  next();
+};
+
 // Endpoint de importación de Norma Minsal
 // Ruta completa: POST /api/catalogs/norma-minsal/import
-router.post('/catalogs/norma-minsal/import', requireAuth, upload.single('file'), async (req: Request, res: Response) => {
+router.post('/catalogs/norma-minsal/import', requireAuth, (req: Request, res: Response, next: NextFunction) => {
+  console.log('📋 Iniciando procesamiento de archivo...');
+  console.log('Content-Type:', req.headers['content-type']);
+  console.log('Content-Length:', req.headers['content-length']);
+  
+  upload.single('file')(req, res, (err: any) => {
+    if (err) {
+      console.error('❌ Error de Multer:', err);
+      console.error('Error code:', err?.code);
+      console.error('Error message:', err?.message);
+      return handleMulterError(err, req, res, next);
+    }
+    console.log('✅ Archivo procesado por Multer correctamente');
+    next();
+  });
+}, async (req: Request, res: Response) => {
   const errorRecords: any[] = [];
   const successRecords: any[] = [];
 
@@ -178,6 +223,14 @@ router.post('/catalogs/norma-minsal/import', requireAuth, upload.single('file'),
       } catch (e: any) {
         console.error(`Error procesando GRD ${codigo}:`, e.message);
         console.error('Stack:', e.stack);
+        console.error('Error code:', e.code);
+        console.error('Error name:', e.name);
+        
+        // Si es un error de conexión a la base de datos, detener el proceso
+        if (e.code === 'P1001' || e.code === 'P1002' || e.message?.includes('connect')) {
+          throw new Error(`Error de conexión a la base de datos: ${e.message}`);
+        }
+        
         errorRecords.push({
           fila: index + 1,
           error: `Error al guardar: ${e.message}`,
@@ -206,6 +259,7 @@ router.post('/catalogs/norma-minsal/import', requireAuth, upload.single('file'),
     console.error('Stack:', error?.stack);
     console.error('Error name:', error?.name);
     console.error('Error code:', error?.code);
+    console.error('Error type:', typeof error);
     
     // Si es un error de Prisma, dar más información
     if (error?.code) {
@@ -217,6 +271,23 @@ router.post('/catalogs/norma-minsal/import', requireAuth, upload.single('file'),
           details: error.meta
         });
       }
+      // Errores de conexión a la base de datos
+      if (error.code === 'P1001' || error.code === 'P1002' || error.code === 'P1000') {
+        return res.status(503).json({
+          error: 'Error de conexión a la base de datos',
+          message: 'No se pudo conectar con la base de datos. Por favor, intenta más tarde.',
+          details: process.env.NODE_ENV === 'development' ? error.message : undefined
+        });
+      }
+    }
+
+    // Si es un error de sintaxis o parseo
+    if (error instanceof SyntaxError) {
+      return res.status(400).json({
+        error: 'Error de formato',
+        message: 'El archivo tiene un formato inválido',
+        details: error.message
+      });
     }
 
     return res.status(500).json({
