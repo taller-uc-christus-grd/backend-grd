@@ -218,23 +218,24 @@ router.get('/episodios/:id', requireAuth, async (req: Request, res: Response) =>
       return res.status(400).json({ error: 'ID es requerido' });
     }
     
-    // Intentar buscar por ID numérico o por episodioCmdb
+    // Buscar episodio de forma flexible: primero por episodioCmdb, luego por id interno
+    // El frontend puede enviar el campo "episodio" (episodioCmdb) como string numérico
     const idNum = parseInt(id);
     let episodio;
     
-    if (isNaN(idNum)) {
-      // Buscar por episodioCmdb (string) - usar findFirst porque no es único
-      episodio = await prisma.episodio.findFirst({
-        where: { episodioCmdb: id },
-        include: {
-          paciente: true,
-          grd: true,
-          diagnosticos: true,
-          respaldos: true,
-        },
-      });
-    } else {
-      // Buscar por ID numérico (único)
+    // Intentar buscar primero por episodioCmdb (el campo que usa el frontend)
+    episodio = await prisma.episodio.findFirst({
+      where: { episodioCmdb: id },
+      include: {
+        paciente: true,
+        grd: true,
+        diagnosticos: true,
+        respaldos: true,
+      },
+    });
+
+    // Si no se encuentra por episodioCmdb y el ID es numérico, intentar por id interno
+    if (!episodio && !isNaN(idNum)) {
       episodio = await prisma.episodio.findUnique({
         where: { id: idNum },
         include: {
@@ -300,35 +301,29 @@ router.put('/episodios/:id', requireAuth, async (req: Request, res: Response) =>
       });
     }
 
-    // Intentar buscar por ID numérico o por episodioCmdb
+    // Buscar episodio de forma flexible: primero por episodioCmdb, luego por id interno
     const idNum = parseInt(id);
     let episodioId: number;
 
-    if (isNaN(idNum)) {
-      // Buscar por episodioCmdb (string) - obtener el ID primero
-      const existing = await prisma.episodio.findFirst({
-        where: { episodioCmdb: id },
-        select: { id: true },
-      });
-      
-      if (!existing) {
-        return res.status(404).json({ error: 'Episodio no encontrado' });
-      }
-      
-      episodioId = existing.id;
-    } else {
-      // Verificar que existe el ID numérico
-      const existing = await prisma.episodio.findUnique({
+    // Intentar buscar primero por episodioCmdb (el campo que usa el frontend)
+    let existing = await prisma.episodio.findFirst({
+      where: { episodioCmdb: id },
+      select: { id: true },
+    });
+
+    // Si no se encuentra por episodioCmdb y el ID es numérico, intentar por id interno
+    if (!existing && !isNaN(idNum)) {
+      existing = await prisma.episodio.findUnique({
         where: { id: idNum },
         select: { id: true },
       });
-      
-      if (!existing) {
-        return res.status(404).json({ error: 'Episodio no encontrado' });
-      }
-      
-      episodioId = idNum;
     }
+
+    if (!existing) {
+      return res.status(404).json({ error: 'Episodio no encontrado' });
+    }
+
+    episodioId = existing.id;
 
     const updated = await prisma.episodio.update({
       where: { id: episodioId },
@@ -469,23 +464,25 @@ router.patch('/episodios/:id', requireAuth, requireRole(['finanzas', 'FINANZAS']
       // Si ya es objeto/array, dejarlo así
     }
 
-    // Buscar episodio por ID numérico o por episodioCmdb
+    // Buscar episodio de forma flexible: primero por episodioCmdb, luego por id interno
+    // El frontend puede enviar el campo "episodio" (episodioCmdb) como string numérico
     const idNum = parseInt(id);
     let episodio;
 
-    if (isNaN(idNum)) {
-      // Buscar por episodioCmdb (string)
-      episodio = await prisma.episodio.findFirst({
-        where: { episodioCmdb: id },
-        include: {
-          paciente: true,
-          grd: true,
-          diagnosticos: true,
-          respaldos: true,
-        },
-      });
-    } else {
-      // Buscar por ID numérico
+    // Intentar buscar primero por episodioCmdb (el campo que usa el frontend)
+    // Esto es importante porque el frontend envía el valor del campo "episodio" del objeto
+    episodio = await prisma.episodio.findFirst({
+      where: { episodioCmdb: id },
+      include: {
+        paciente: true,
+        grd: true,
+        diagnosticos: true,
+        respaldos: true,
+      },
+    });
+
+    // Si no se encuentra por episodioCmdb y el ID es numérico, intentar por id interno
+    if (!episodio && !isNaN(idNum)) {
       episodio = await prisma.episodio.findUnique({
         where: { id: idNum },
         include: {
@@ -498,10 +495,24 @@ router.patch('/episodios/:id', requireAuth, requireRole(['finanzas', 'FINANZAS']
     }
 
     if (!episodio) {
+      // Log para debugging
+      console.log(`🔍 PATCH /api/episodios/${id}: Episodio no encontrado`);
+      console.log(`   - Buscado por episodioCmdb: "${id}"`);
+      if (!isNaN(idNum)) {
+        console.log(`   - Buscado por id interno: ${idNum}`);
+      }
+      
       return res.status(404).json({
         message: `El episodio ${id} no fue encontrado`,
         error: 'NotFound'
       });
+    }
+
+    // Log para debugging (solo en desarrollo)
+    if (process.env.NODE_ENV === 'development') {
+      console.log(`✅ PATCH /api/episodios/${id}: Episodio encontrado`);
+      console.log(`   - ID interno: ${episodio.id}`);
+      console.log(`   - episodioCmdb: ${episodio.episodioCmdb}`);
     }
 
     // Obtener valores actuales para calcular montoFinal
