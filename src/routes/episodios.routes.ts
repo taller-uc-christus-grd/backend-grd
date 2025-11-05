@@ -95,7 +95,7 @@ router.get('/episodios', requireAuth, async (_req: Request, res: Response) => {
 });
 
 // Obtener episodio por id (AHORA DESDE PRISMA)
-router.get('/episodios/:id([0-9]+)', requireAuth, async (req: Request, res: Response) => {
+router.get('/episodios/:id', requireAuth, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     
@@ -158,7 +158,7 @@ router.post('/episodios', requireAuth, async (req: Request, res: Response) => {
 });
 
 // Actualizar episodio (AHORA EN PRISMA)
-router.put('/episodios/:id([0-9]+)', requireAuth, async (req: Request, res: Response) => {
+router.put('/episodios/:id', requireAuth, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const { error, value } = episodioSchema.validate(req.body, {
@@ -188,7 +188,7 @@ router.put('/episodios/:id([0-9]+)', requireAuth, async (req: Request, res: Resp
 });
 
 // Eliminar episodio (AHORA EN PRISMA)
-router.delete('/episodios/:id([0-9]+)', requireAuth, async (req: Request, res: Response) => {
+router.delete('/episodios/:id', requireAuth, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     await prisma.episodio.delete({
