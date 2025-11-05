@@ -140,8 +140,13 @@ router.post('/catalogs/norma-minsal/import', requireAuth, (req: Request, res: Re
       return res.status(400).json({ error: 'No se proporcionó ningún archivo' });
     }
 
+    // Log para identificar si viene de local o producción
+    const origin = req.get('origin') || req.get('referer') || 'unknown';
+    const host = req.get('host') || 'unknown';
     console.log('📥 Iniciando importación de Norma Minsal...');
-    console.log('Archivo:', req.file.originalname, 'Tamaño:', req.file.size, 'bytes');
+    console.log('🌐 Origen de la petición:', origin);
+    console.log('🌐 Host del backend:', host);
+    console.log('📁 Archivo:', req.file.originalname, 'Tamaño:', req.file.size, 'bytes');
 
     const replace = req.body.replace === 'true';
 
@@ -192,26 +197,56 @@ router.post('/catalogs/norma-minsal/import', requireAuth, (req: Request, res: Re
     }
 
     console.log(`Procesando ${data.length} registros de Norma Minsal...`);
+    
+    // Log de las primeras filas para debugging
+    if (data.length > 0) {
+      console.log('📋 Primera fila de ejemplo:', JSON.stringify(data[0], null, 2));
+      console.log('📋 Claves de la primera fila:', Object.keys(data[0]));
+    }
 
     // Procesar cada fila
     for (let index = 0; index < data.length; index++) {
       const row = data[index];
       
+      // Función auxiliar para convertir cualquier valor a string de forma segura
+      const safeString = (value: any): string | null => {
+        if (value === null || value === undefined) return null;
+        if (typeof value === 'string') return value.trim();
+        if (typeof value === 'number') return String(value).trim();
+        try {
+          return String(value).trim();
+        } catch (e) {
+          return null;
+        }
+      };
+      
       // Buscar el campo GRD de forma flexible (puede venir con diferentes nombres o espacios)
-      let grdValue = row.GRD || row['GRD'] || row['grd'] || row['Grd'];
+      let grdValue: any = null;
+      
+      // Intentar diferentes nombres posibles
+      const possibleKeys = ['GRD', 'grd', 'Grd', 'GRD ', ' GRD', 'GRD Código', 'Código GRD'];
+      for (const key of possibleKeys) {
+        if (row[key] !== undefined && row[key] !== null && row[key] !== '') {
+          grdValue = row[key];
+          break;
+        }
+      }
       
       // Si no encontramos GRD, intentar buscar cualquier campo que contenga "GRD"
       if (!grdValue) {
         for (const key in row) {
-          if (key.toUpperCase().includes('GRD') || key.toLowerCase().includes('grd')) {
-            grdValue = row[key];
-            break;
+          if (key && (key.toUpperCase().includes('GRD') || key.toLowerCase().includes('grd'))) {
+            const value = row[key];
+            if (value !== undefined && value !== null && value !== '') {
+              grdValue = value;
+              break;
+            }
           }
         }
       }
       
-      // Convertir a string y limpiar
-      const codigo = grdValue ? String(grdValue).trim() : null;
+      // Convertir a string de forma segura
+      const codigo = safeString(grdValue);
 
       // Validar que tenga código GRD
       if (!codigo || codigo === '') {
