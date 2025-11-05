@@ -44,6 +44,15 @@ interface NormaRow {
   [key: string]: any;
 }
 
+// Función auxiliar para convertir string a número Decimal para Prisma
+function parseDecimal(value: string | undefined, defaultValue: number = 0): number {
+  if (!value) return defaultValue;
+  // Reemplazar comas por puntos y eliminar espacios
+  const cleaned = value.toString().replace(',', '.').replace(/\s/g, '');
+  const parsed = parseFloat(cleaned);
+  return isNaN(parsed) ? defaultValue : parsed;
+}
+
 // Endpoint de importación de Norma Minsal
 // Ruta completa: POST /api/catalogs/norma-minsal/import
 router.post('/catalogs/norma-minsal/import', requireAuth, upload.single('file'), async (req: Request, res: Response) => {
@@ -54,6 +63,9 @@ router.post('/catalogs/norma-minsal/import', requireAuth, upload.single('file'),
     if (!req.file) {
       return res.status(400).json({ error: 'No se proporcionó ningún archivo' });
     }
+
+    console.log('📥 Iniciando importación de Norma Minsal...');
+    console.log('Archivo:', req.file.originalname, 'Tamaño:', req.file.size, 'bytes');
 
     const replace = req.body.replace === 'true';
 
@@ -70,19 +82,37 @@ router.post('/catalogs/norma-minsal/import', requireAuth, upload.single('file'),
     let data: NormaRow[] = [];
 
     // Parsear archivo desde el buffer de memoria
-    if (ext === '.csv') {
-      await new Promise<void>((resolve, reject) => {
-        Readable.from(fileBuffer)
-          .pipe(csv())
-          .on('data', (row) => data.push(row as NormaRow))
-          .on('end', resolve)
-          .on('error', reject);
+    try {
+      if (ext === '.csv') {
+        await new Promise<void>((resolve, reject) => {
+          Readable.from(fileBuffer)
+            .pipe(csv())
+            .on('data', (row) => data.push(row as NormaRow))
+            .on('end', resolve)
+            .on('error', (err) => {
+              console.error('Error parseando CSV:', err);
+              reject(err);
+            });
+        });
+      } else {
+        const workbook = XLSX.read(fileBuffer, { type: 'buffer' });
+        if (!workbook.SheetNames || workbook.SheetNames.length === 0) {
+          throw new Error('El archivo Excel no contiene hojas');
+        }
+        const sheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[sheetName];
+        data = XLSX.utils.sheet_to_json(worksheet) as NormaRow[];
+      }
+    } catch (parseError: any) {
+      console.error('Error parseando archivo:', parseError);
+      return res.status(400).json({
+        error: 'Error al parsear el archivo',
+        message: parseError.message || 'Formato de archivo inválido'
       });
-    } else {
-      const workbook = XLSX.read(fileBuffer, { type: 'buffer' });
-      const sheetName = workbook.SheetNames[0];
-      const worksheet = workbook.Sheets[sheetName];
-      data = XLSX.utils.sheet_to_json(worksheet) as NormaRow[];
+    }
+
+    if (data.length === 0) {
+      return res.status(400).json({ error: 'El archivo está vacío o no contiene datos válidos' });
     }
 
     console.log(`Procesando ${data.length} registros de Norma Minsal...`);
@@ -102,16 +132,16 @@ router.post('/catalogs/norma-minsal/import', requireAuth, upload.single('file'),
         continue;
       }
 
-      // Parsear valores numéricos (reemplazar comas por puntos para decimales)
-      const peso = parseFloat(row['Peso Total']?.replace(',', '.') || '0');
-      const pci = parseFloat(row['Punto Corte Inferior']?.replace(',', '.') || '0');
-      const pcs = parseFloat(row['Punto Corte Superior']?.replace(',', '.') || '0');
+      // Parsear valores numéricos usando la función auxiliar
+      const peso = parseDecimal(row['Peso Total']);
+      const pci = parseDecimal(row['Punto Corte Inferior']);
+      const pcs = parseDecimal(row['Punto Corte Superior']);
 
-      // Validar que los valores numéricos sean válidos
-      if (isNaN(peso) || isNaN(pci) || isNaN(pcs)) {
+      // Validar que los valores numéricos sean válidos (al menos uno debe ser mayor a 0)
+      if (peso === 0 && pci === 0 && pcs === 0) {
         errorRecords.push({
           fila: index + 1,
-          error: 'Valores numéricos inválidos (Peso, Punto Corte Inferior o Superior)',
+          error: 'Todos los valores numéricos son cero o inválidos',
           registro: row,
         });
         continue;
@@ -121,7 +151,7 @@ router.post('/catalogs/norma-minsal/import', requireAuth, upload.single('file'),
       // Si el CSV tiene una columna de precio, usarla; sino calcular
       const precioBaseEjemplo = (peso * 1000000) + 500000;
 
-      // Preparar datos para upsert
+      // Preparar datos para upsert - Prisma acepta números directamente para Decimal
       const dataToUpsert: Prisma.GrdUncheckedCreateInput = {
         codigo: codigo,
         descripcion: `Descripción de ${codigo}`, // El CSV no suele tener descripción
@@ -147,6 +177,7 @@ router.post('/catalogs/norma-minsal/import', requireAuth, upload.single('file'),
         });
       } catch (e: any) {
         console.error(`Error procesando GRD ${codigo}:`, e.message);
+        console.error('Stack:', e.stack);
         errorRecords.push({
           fila: index + 1,
           error: `Error al guardar: ${e.message}`,
@@ -168,10 +199,26 @@ router.post('/catalogs/norma-minsal/import', requireAuth, upload.single('file'),
       errorDetails: errorRecords.slice(0, 50),
     };
 
+    console.log(`✅ Importación completada: ${successRecords.length} exitosos, ${errorRecords.length} errores`);
     return res.status(200).json(response);
   } catch (error: any) {
-    console.error('Error al importar Norma Minsal:', error);
+    console.error('❌ Error al importar Norma Minsal:', error);
     console.error('Stack:', error?.stack);
+    console.error('Error name:', error?.name);
+    console.error('Error code:', error?.code);
+    
+    // Si es un error de Prisma, dar más información
+    if (error?.code) {
+      console.error('Prisma error code:', error.code);
+      if (error.code === 'P2002') {
+        return res.status(400).json({
+          error: 'Error de duplicado',
+          message: 'Ya existe un GRD con ese código',
+          details: error.meta
+        });
+      }
+    }
+
     return res.status(500).json({
       error: 'Error interno del servidor',
       message: error?.message || 'Error procesando archivo',
