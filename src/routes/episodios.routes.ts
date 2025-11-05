@@ -588,11 +588,22 @@ router.patch('/episodios/:id', requireAuth, requireRole(['finanzas', 'FINANZAS']
         } else {
           updateData.estadoRn = null;
         }
-      } else if (typeof value === 'string' && key.match(/^(montoAT|montoRN|pagoDemora|pagoOutlierSup|precioBaseTramo|valorGRD|montoFinal|diasDemoraRescate)$/i)) {
-        // Convertir strings numéricos a números
-        const numValue = dbKey === 'diasDemoraRescate' ? parseInt(value) : parseFloat(value);
-        if (!isNaN(numValue)) {
-          updateData[dbKey] = numValue;
+      } else if (key.match(/^(montoAT|montoRN|pagoDemora|pagoOutlierSup|precioBaseTramo|valorGRD|montoFinal|diasDemoraRescate)$/i)) {
+        // Convertir strings numéricos a números (si es string)
+        // Si ya es número, dejarlo como está
+        if (typeof value === 'string') {
+          const numValue = dbKey === 'diasDemoraRescate' ? parseInt(value, 10) : parseFloat(value);
+          if (!isNaN(numValue) && isFinite(numValue)) {
+            updateData[dbKey] = dbKey === 'diasDemoraRescate' ? Math.floor(numValue) : numValue;
+          } else {
+            // Si no se puede convertir, usar null
+            updateData[dbKey] = null;
+          }
+        } else if (typeof value === 'number') {
+          // Si ya es número, asegurar que sea entero para diasDemoraRescate
+          updateData[dbKey] = dbKey === 'diasDemoraRescate' ? Math.floor(value) : value;
+        } else {
+          updateData[dbKey] = value;
         }
       } else {
         updateData[dbKey] = value;
