@@ -56,6 +56,38 @@ function mapFieldsToDB(data: any): any {
   return mapped;
 }
 
+// Funciones de cálculo (deben estar antes de normalizeEpisodeResponse)
+
+// Función para calcular valorGRD como peso * precioBaseTramo
+function calcularValorGRD(
+  peso: number | null | undefined,
+  precioBaseTramo: number | null | undefined
+): number {
+  const pesoNum = peso ?? 0;
+  const precioNum = precioBaseTramo ?? 0;
+  
+  if (pesoNum === 0 || precioNum === 0) {
+    return 0;
+  }
+  
+  return pesoNum * precioNum;
+}
+
+// Función para calcular montoFinal según la fórmula de negocio
+function calcularMontoFinal(
+  valorGRD: number | null | undefined,
+  montoAT: number | null | undefined,
+  pagoOutlierSup: number | null | undefined,
+  pagoDemora: number | null | undefined
+): number {
+  const vGRD = valorGRD ?? 0;
+  const mAT = montoAT ?? 0;
+  const pOutlier = pagoOutlierSup ?? 0;
+  const pDemora = pagoDemora ?? 0;
+  
+  return vGRD + mAT + pOutlier + pDemora;
+}
+
 // Función para normalizar datos de episodio antes de enviar al frontend
 function normalizeEpisodeResponse(episode: any): any {
   // Normalizar campo 'at': SIEMPRE devolver "S" o "N" (string)
@@ -99,6 +131,12 @@ function normalizeEpisodeResponse(episode: any): any {
     return num !== null ? Math.floor(num) : null;
   };
 
+  // Normalizar atDetalle: siempre string o null (nunca undefined o "")
+  let atDetalle: string | null = null;
+  if (episode.atDetalle && typeof episode.atDetalle === 'string' && episode.atDetalle.trim() !== '') {
+    atDetalle = episode.atDetalle;
+  }
+
   // Normalizar documentacion
   let documentacion: string | null = null;
   if (episode.documentacion) {
@@ -113,6 +151,22 @@ function normalizeEpisodeResponse(episode: any): any {
     }
   }
 
+  // SIEMPRE recalcular valorGRD = peso * precioBaseTramo
+  const peso = toNumber(episode.pesoGrd) ?? 0;
+  const precioBaseTramo = toNumber(episode.precioBaseTramo) ?? 0;
+  const valorGRDCalculado = calcularValorGRD(peso, precioBaseTramo);
+
+  // SIEMPRE recalcular montoFinal = valorGRD + montoAT + pagoOutlierSup + pagoDemora
+  const montoAT = toNumber(episode.montoAt) ?? 0;
+  const pagoOutlierSup = toNumber(episode.pagoOutlierSuperior) ?? 0;
+  const pagoDemora = toNumber(episode.pagoDemoraRescate) ?? 0;
+  const montoFinalCalculado = calcularMontoFinal(
+    valorGRDCalculado,
+    montoAT,
+    pagoOutlierSup,
+    pagoDemora
+  );
+
   return {
     episodio: episode.episodioCmdb || '',
     rut: episode.paciente?.rut || '',
@@ -124,15 +178,15 @@ function normalizeEpisodeResponse(episode: any): any {
     // Campos editables por finanzas (NORMALIZADOS)
     estadoRN, // string válido o null
     at: atValue, // SIEMPRE "S" o "N"
-    atDetalle: episode.atDetalle || null,
+    atDetalle, // SIEMPRE string o null (nunca undefined o "")
     montoAT: toNumber(episode.montoAt), // SIEMPRE number o null
     montoRN: toNumber(episode.montoRn), // SIEMPRE number o null
     diasDemoraRescate: toInteger(episode.diasDemoraRescate), // SIEMPRE integer o null
     pagoDemora: toNumber(episode.pagoDemoraRescate), // SIEMPRE number o null
     pagoOutlierSup: toNumber(episode.pagoOutlierSuperior), // SIEMPRE number o null
     precioBaseTramo: toNumber(episode.precioBaseTramo), // SIEMPRE number o null
-    valorGRD: toNumber(episode.valorGrd), // SIEMPRE number o null
-    montoFinal: toNumber(episode.montoFinal), // SIEMPRE number o null
+    valorGRD: valorGRDCalculado, // SIEMPRE calculado como peso * precioBaseTramo
+    montoFinal: montoFinalCalculado, // SIEMPRE calculado automáticamente
     documentacion, // string o null
     
     // Campos de solo lectura
@@ -512,36 +566,6 @@ const finanzasFieldMapping: Record<string, string> = {
   pagoOutlierSup: 'pagoOutlierSuperior',
   // valorGRD: NO editable, se calcula automáticamente
 };
-
-// Función para calcular valorGRD como peso * precioBaseTramo
-function calcularValorGRD(
-  peso: number | null | undefined,
-  precioBaseTramo: number | null | undefined
-): number {
-  const pesoNum = peso ?? 0;
-  const precioNum = precioBaseTramo ?? 0;
-  
-  if (pesoNum === 0 || precioNum === 0) {
-    return 0;
-  }
-  
-  return pesoNum * precioNum;
-}
-
-// Función para calcular montoFinal según la fórmula de negocio
-function calcularMontoFinal(
-  valorGRD: number | null | undefined,
-  montoAT: number | null | undefined,
-  pagoOutlierSup: number | null | undefined,
-  pagoDemora: number | null | undefined
-): number {
-  const vGRD = valorGRD ?? 0;
-  const mAT = montoAT ?? 0;
-  const pOutlier = pagoOutlierSup ?? 0;
-  const pDemora = pagoDemora ?? 0;
-  
-  return vGRD + mAT + pOutlier + pDemora;
-}
 
 // Actualizar episodio parcialmente (PATCH) - Funcionalidad de Finanzas
 router.patch('/episodios/:id', requireAuth, requireRole(['finanzas', 'FINANZAS']), async (req: Request, res: Response) => {
