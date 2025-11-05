@@ -379,6 +379,29 @@ router.get('/episodios/final', requireAuth, async (req: Request, res: Response) 
 // IMPORTANTE: Estas rutas deben ir ANTES de /episodios/:id para evitar conflictos
 // ===================================================================
 
+// Helper para buscar episodio de forma flexible (por episodioCmdb o id interno)
+// El frontend puede enviar el campo "episodio" (episodioCmdb) como string numérico
+async function findEpisodioFlexibleForDocuments(identifier: string) {
+  const idNum = parseInt(identifier);
+  let episodio;
+
+  // Intentar buscar primero por episodioCmdb (el campo que usa el frontend)
+  episodio = await prisma.episodio.findFirst({
+    where: { episodioCmdb: identifier },
+    select: { id: true },
+  });
+
+  // Si no se encuentra por episodioCmdb y el ID es numérico, intentar por id interno
+  if (!episodio && !isNaN(idNum)) {
+    episodio = await prisma.episodio.findUnique({
+      where: { id: idNum },
+      select: { id: true },
+    });
+  }
+
+  return episodio;
+}
+
 // Configuración de Multer para documentos (usando memoryStorage para Cloudinary)
 const documentosStorage = multer.memoryStorage();
 const documentosUpload = multer({
@@ -404,14 +427,15 @@ router.post(
         return res.status(400).json({ error: 'No se proporcionó ningún archivo' });
       }
 
-      // Verificar que el episodio exista
-      const episodio = await prisma.episodio.findUnique({
-        where: { id: parseInt(episodioId) },
-      });
+      // Buscar episodio de forma flexible (por episodioCmdb o id interno)
+      const episodio = await findEpisodioFlexibleForDocuments(episodioId);
 
       if (!episodio) {
         return res.status(404).json({ error: 'Episodio no encontrado' });
       }
+
+      // Usar el ID interno del episodio encontrado
+      const episodioIdInterno = episodio.id;
 
       // Preparar nombre del archivo (sin extensión para public_id)
       const originalName = req.file.originalname;
@@ -421,8 +445,9 @@ router.post(
       const nombreArchivoLimpio = nombreSinExtension.replace(/[^a-zA-Z0-9_-]/g, '_');
 
       // Estructura según especificación: folder: episodios/{episodioId}, public_id: episodios/{episodioId}/{nombreArchivo}
-      const folder = `episodios/${episodioId}`;
-      const publicId = `episodios/${episodioId}/${nombreArchivoLimpio}`;
+      // Usar el ID interno para la estructura de carpetas en Cloudinary
+      const folder = `episodios/${episodioIdInterno}`;
+      const publicId = `episodios/${episodioIdInterno}/${nombreArchivoLimpio}`;
 
       // Subir archivo a Cloudinary
       const result: any = await uploadToCloudinary(req.file.buffer, {
@@ -431,7 +456,7 @@ router.post(
         resource_type: 'auto', // Detecta automáticamente el tipo (PDF, imagen, etc.)
       });
 
-      // Guardar en la base de datos
+      // Guardar en la base de datos usando el ID interno
       const documento = await prisma.documentoCloudinary.create({
         data: {
           nombre: originalName,
@@ -439,7 +464,7 @@ router.post(
           url: result.secure_url,
           formato: extension.substring(1).toLowerCase(), // Sin el punto
           tamano: req.file.size,
-          episodioId: parseInt(episodioId),
+          episodioId: episodioIdInterno,
         },
       });
 
@@ -474,18 +499,19 @@ router.get('/episodios/:episodioId/documentos', requireAuth, async (req: Request
   try {
     const { episodioId } = req.params;
 
-    // Verificar que el episodio exista
-    const episodio = await prisma.episodio.findUnique({
-      where: { id: parseInt(episodioId) },
-    });
+    // Buscar episodio de forma flexible (por episodioCmdb o id interno)
+    const episodio = await findEpisodioFlexibleForDocuments(episodioId);
 
     if (!episodio) {
       return res.status(404).json({ error: 'Episodio no encontrado' });
     }
 
+    // Usar el ID interno del episodio encontrado
+    const episodioIdInterno = episodio.id;
+
     // Obtener documentos del episodio
     const documentos = await prisma.documentoCloudinary.findMany({
-      where: { episodioId: parseInt(episodioId) },
+      where: { episodioId: episodioIdInterno },
       orderBy: { uploadedAt: 'desc' },
     });
 
@@ -522,14 +548,15 @@ router.delete(
     try {
       const { episodioId, documentoId } = req.params;
 
-      // Verificar que el episodio exista
-      const episodio = await prisma.episodio.findUnique({
-        where: { id: parseInt(episodioId) },
-      });
+      // Buscar episodio de forma flexible (por episodioCmdb o id interno)
+      const episodio = await findEpisodioFlexibleForDocuments(episodioId);
 
       if (!episodio) {
         return res.status(404).json({ error: 'Episodio no encontrado' });
       }
+
+      // Usar el ID interno del episodio encontrado
+      const episodioIdInterno = episodio.id;
 
       // Buscar el documento
       const documento = await prisma.documentoCloudinary.findUnique({
@@ -541,7 +568,7 @@ router.delete(
       }
 
       // Verificar que el documento pertenezca al episodio
-      if (documento.episodioId !== parseInt(episodioId)) {
+      if (documento.episodioId !== episodioIdInterno) {
         return res.status(400).json({ error: 'El documento no pertenece a este episodio' });
       }
 
