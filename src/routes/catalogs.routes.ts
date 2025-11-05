@@ -83,6 +83,30 @@ const handleMulterError = (err: any, req: Request, res: Response, next: NextFunc
   next();
 };
 
+// Endpoint GET para obtener información sobre la Norma Minsal
+router.get('/catalogs/norma-minsal', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const count = await prisma.grd.count();
+    const latestUpdate = await prisma.grd.findFirst({
+      orderBy: { createdAt: 'desc' },
+      select: { createdAt: true }
+    });
+
+    return res.json({
+      version: 'latest',
+      totalRecords: count,
+      lastUpdated: latestUpdate?.createdAt || null,
+      status: 'active'
+    });
+  } catch (error: any) {
+    console.error('Error obteniendo información de Norma Minsal:', error);
+    return res.status(500).json({
+      error: 'Error al obtener información',
+      message: error?.message || 'Error desconocido'
+    });
+  }
+});
+
 // Endpoint de importación de Norma Minsal
 // Ruta completa: POST /api/catalogs/norma-minsal/import
 router.post('/catalogs/norma-minsal/import', requireAuth, (req: Request, res: Response, next: NextFunction) => {
@@ -100,7 +124,7 @@ router.post('/catalogs/norma-minsal/import', requireAuth, (req: Request, res: Re
     console.log('✅ Archivo procesado por Multer correctamente');
     next();
   });
-}, async (req: Request, res: Response) => {
+}, async (req: Request, res: Response, next: NextFunction) => {
   const errorRecords: any[] = [];
   const successRecords: any[] = [];
 
@@ -290,11 +314,16 @@ router.post('/catalogs/norma-minsal/import', requireAuth, (req: Request, res: Re
       });
     }
 
-    return res.status(500).json({
-      error: 'Error interno del servidor',
-      message: error?.message || 'Error procesando archivo',
-      details: process.env.NODE_ENV === 'development' ? error?.stack : undefined
-    });
+    // Si no se envió respuesta, usar el error handler global
+    if (!res.headersSent) {
+      return res.status(500).json({
+        error: 'Error interno del servidor',
+        message: error?.message || 'Error procesando archivo',
+        details: process.env.NODE_ENV === 'development' ? error?.stack : undefined
+      });
+    }
+    // Si ya se envió respuesta, pasar el error al error handler global
+    next(error);
   }
 });
 
