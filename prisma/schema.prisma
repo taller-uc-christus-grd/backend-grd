@@ -89,6 +89,7 @@ model Episodio {
 
   diagnosticos Diagnostico[]
   respaldos    Respaldo[]
+  documentos   DocumentoCloudinary[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -137,4 +138,19 @@ model LogSistema {
   usuario Usuario? @relation("UsuarioLog", fields: [userId], references: [id])
 
   @@index([userId])
+}
+
+model DocumentoCloudinary {
+  id          Int      @id @default(autoincrement())
+  nombre      String
+  publicId    String   @unique // public_id de Cloudinary
+  url         String   // URL del archivo en Cloudinary
+  formato     String?  // Extensión del archivo (pdf, jpg, etc.)
+  tamano      Int?     // Tamaño en bytes
+  uploadedAt  DateTime @default(now())
+
+  episodioId Int
+  episodio   Episodio @relation(fields: [episodioId], references: [id], onDelete: Cascade)
+
+  @@index([episodioId])
 }
