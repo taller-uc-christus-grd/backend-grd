@@ -56,6 +56,100 @@ function mapFieldsToDB(data: any): any {
   return mapped;
 }
 
+// Función para normalizar datos de episodio antes de enviar al frontend
+function normalizeEpisodeResponse(episode: any): any {
+  // Normalizar campo 'at': SIEMPRE devolver "S" o "N" (string)
+  let atValue: string;
+  if (episode.atSn === true || episode.atSn === 'S' || episode.atSn === 's') {
+    atValue = 'S';
+  } else {
+    atValue = 'N';
+  }
+
+  // Normalizar estadoRN: string válido o null (nunca undefined o "")
+  let estadoRN: string | null = null;
+  if (episode.estadoRn && ['Aprobado', 'Pendiente', 'Rechazado'].includes(episode.estadoRn)) {
+    estadoRN = episode.estadoRn;
+  }
+
+  // Helper para convertir a número seguro
+  const toNumber = (value: any): number | null => {
+    if (value === null || value === undefined) return null;
+    if (typeof value === 'number') {
+      if (isNaN(value) || !isFinite(value)) return null;
+      return value;
+    }
+    if (typeof value === 'string') {
+      const parsed = parseFloat(value);
+      if (isNaN(parsed) || !isFinite(parsed)) return null;
+      return parsed;
+    }
+    // Si es Decimal de Prisma
+    if (value && typeof value.toNumber === 'function') {
+      const num = value.toNumber();
+      if (isNaN(num) || !isFinite(num)) return null;
+      return num;
+    }
+    return null;
+  };
+
+  // Helper para convertir a entero seguro
+  const toInteger = (value: any): number | null => {
+    const num = toNumber(value);
+    return num !== null ? Math.floor(num) : null;
+  };
+
+  // Normalizar documentacion
+  let documentacion: string | null = null;
+  if (episode.documentacion) {
+    if (typeof episode.documentacion === 'string') {
+      documentacion = episode.documentacion;
+    } else if (typeof episode.documentacion === 'object' && episode.documentacion !== null) {
+      if ('texto' in episode.documentacion) {
+        documentacion = episode.documentacion.texto as string;
+      } else {
+        documentacion = JSON.stringify(episode.documentacion);
+      }
+    }
+  }
+
+  return {
+    episodio: episode.episodioCmdb || '',
+    rut: episode.paciente?.rut || '',
+    nombre: episode.paciente?.nombre || '',
+    fechaIngreso: episode.fechaIngreso ? episode.fechaIngreso.toISOString().split('T')[0] : null,
+    fechaAlta: episode.fechaAlta ? episode.fechaAlta.toISOString().split('T')[0] : null,
+    servicioAlta: episode.servicioAlta || '',
+    
+    // Campos editables por finanzas (NORMALIZADOS)
+    estadoRN, // string válido o null
+    at: atValue, // SIEMPRE "S" o "N"
+    atDetalle: episode.atDetalle || null,
+    montoAT: toNumber(episode.montoAt), // SIEMPRE number o null
+    montoRN: toNumber(episode.montoRn), // SIEMPRE number o null
+    diasDemoraRescate: toInteger(episode.diasDemoraRescate), // SIEMPRE integer o null
+    pagoDemora: toNumber(episode.pagoDemoraRescate), // SIEMPRE number o null
+    pagoOutlierSup: toNumber(episode.pagoOutlierSuperior), // SIEMPRE number o null
+    precioBaseTramo: toNumber(episode.precioBaseTramo), // SIEMPRE number o null
+    valorGRD: toNumber(episode.valorGrd), // SIEMPRE number o null
+    montoFinal: toNumber(episode.montoFinal), // SIEMPRE number o null
+    documentacion, // string o null
+    
+    // Campos de solo lectura
+    grdCodigo: episode.grd?.codigo || '',
+    peso: toNumber(episode.pesoGrd), // SIEMPRE number o null
+    inlierOutlier: episode.inlierOutlier || '',
+    grupoDentroNorma: episode.grupoEnNorma || false,
+    diasEstada: toInteger(episode.diasEstada), // SIEMPRE integer o null
+    
+    // Otros campos del episodio
+    centro: episode.centro || null,
+    numeroFolio: episode.numeroFolio || null,
+    tipoEpisodio: episode.tipoEpisodio || null,
+    id: episode.id,
+  };
+}
+
 // Esquema Joi para validación (lo mantenemos)
 const episodioSchema = Joi.object({
   centro: Joi.string().optional().allow(null),
@@ -175,22 +269,37 @@ router.get('/episodios/final', requireAuth, async (req: Request, res: Response) 
       return 0;
     };
 
-    // Transformar al formato esperado por el frontend
-    const items = episodes.map((e) => ({
-      episodio: e.episodioCmdb || '',
-      nombre: e.paciente?.nombre || '',
-      rut: e.paciente?.rut || '',
-      centro: e.centro || '',
-      folio: e.numeroFolio || '',
-      tipoEpisodio: e.tipoEpisodio || '',
-      fechaIngreso: e.fechaIngreso ? e.fechaIngreso.toISOString().split('T')[0] : '',
-      fechaAlta: e.fechaAlta ? e.fechaAlta.toISOString().split('T')[0] : '',
-      servicioAlta: e.servicioAlta || '',
-      grdCodigo: e.grd?.codigo || '',
-      peso: toNumber(e.pesoGrd),
-      montoRN: toNumber(e.montoRn),
-      inlierOutlier: e.inlierOutlier || '',
-    }));
+    // Transformar al formato esperado por el frontend usando normalización
+    // Usar la función normalizeEpisodeResponse para cada episodio
+    const items = episodes.map((e: any) => {
+      const normalized = normalizeEpisodeResponse(e);
+      // El endpoint /final tiene un formato ligeramente diferente, ajustar campos
+      return {
+        episodio: normalized.episodio,
+        nombre: normalized.nombre,
+        rut: normalized.rut,
+        centro: normalized.centro || '',
+        folio: normalized.numeroFolio || '',
+        tipoEpisodio: normalized.tipoEpisodio || '',
+        fechaIngreso: normalized.fechaIngreso || '',
+        fechaAlta: normalized.fechaAlta || '',
+        servicioAlta: normalized.servicioAlta || '',
+        grdCodigo: normalized.grdCodigo,
+        peso: normalized.peso || 0, // Para compatibilidad con el formato anterior
+        montoRN: normalized.montoRN || 0, // Para compatibilidad con el formato anterior
+        inlierOutlier: normalized.inlierOutlier || '',
+        // Agregar campos normalizados adicionales si el frontend los necesita
+        estadoRN: normalized.estadoRN,
+        at: normalized.at,
+        montoAT: normalized.montoAT,
+        diasDemoraRescate: normalized.diasDemoraRescate,
+        pagoDemora: normalized.pagoDemora,
+        pagoOutlierSup: normalized.pagoOutlierSup,
+        precioBaseTramo: normalized.precioBaseTramo,
+        valorGRD: normalized.valorGRD,
+        montoFinal: normalized.montoFinal,
+      };
+    });
 
     return res.json({
       items,
@@ -250,7 +359,10 @@ router.get('/episodios/:id', requireAuth, async (req: Request, res: Response) =>
     if (!episodio) {
       return res.status(404).json({ error: 'Episodio no encontrado' });
     }
-    res.json(episodio);
+    
+    // Normalizar respuesta antes de enviar
+    const normalized = normalizeEpisodeResponse(episodio);
+    res.json(normalized);
   } catch (error: any) {
     console.error('Error al obtener episodio:', error);
     console.error('Stack:', error?.stack);
@@ -348,18 +460,46 @@ router.put('/episodios/:id', requireAuth, async (req: Request, res: Response) =>
 
 // Esquema de validación específico para campos de finanzas (PATCH)
 // Validamos con nombres del frontend, luego mapeamos a nombres de BD
+// Acepta 'at' como boolean O string ("S"/"N") para retrocompatibilidad
 const finanzasSchema = Joi.object({
-  estadoRN: Joi.string().valid('Aprobado', 'Pendiente', 'Rechazado').allow(null).optional(),
-  at: Joi.boolean().optional(),
+  estadoRN: Joi.string().valid('Aprobado', 'Pendiente', 'Rechazado').allow(null, '').optional(),
+  at: Joi.alternatives().try(
+    Joi.boolean(),
+    Joi.string().valid('S', 's', 'N', 'n')
+  ).optional(),
   atDetalle: Joi.string().allow(null, '').optional(),
-  montoAT: Joi.number().min(0).optional(),
-  montoRN: Joi.number().min(0).optional(),
-  diasDemoraRescate: Joi.number().integer().min(0).optional(),
-  pagoDemora: Joi.number().min(0).allow(null).optional(),
-  pagoOutlierSup: Joi.number().min(0).allow(null).optional(),
-  precioBaseTramo: Joi.number().min(0).optional(),
-  valorGRD: Joi.number().min(0).optional(),
-  montoFinal: Joi.number().min(0).optional(), // Se ignora, se calcula automáticamente
+  montoAT: Joi.alternatives().try(
+    Joi.number().min(0),
+    Joi.string().pattern(/^\d+(\.\d+)?$/).min(0)
+  ).optional(),
+  montoRN: Joi.alternatives().try(
+    Joi.number().min(0),
+    Joi.string().pattern(/^\d+(\.\d+)?$/).min(0)
+  ).optional(),
+  diasDemoraRescate: Joi.alternatives().try(
+    Joi.number().integer().min(0),
+    Joi.string().pattern(/^\d+$/).min(0)
+  ).optional(),
+  pagoDemora: Joi.alternatives().try(
+    Joi.number().min(0),
+    Joi.string().pattern(/^\d+(\.\d+)?$/).min(0)
+  ).allow(null).optional(),
+  pagoOutlierSup: Joi.alternatives().try(
+    Joi.number().min(0),
+    Joi.string().pattern(/^\d+(\.\d+)?$/).min(0)
+  ).allow(null).optional(),
+  precioBaseTramo: Joi.alternatives().try(
+    Joi.number().min(0),
+    Joi.string().pattern(/^\d+(\.\d+)?$/).min(0)
+  ).optional(),
+  valorGRD: Joi.alternatives().try(
+    Joi.number().min(0),
+    Joi.string().pattern(/^\d+(\.\d+)?$/).min(0)
+  ).optional(),
+  montoFinal: Joi.alternatives().try(
+    Joi.number().min(0),
+    Joi.string().pattern(/^\d+(\.\d+)?$/).min(0)
+  ).optional(), // Se ignora, se calcula automáticamente
   documentacion: Joi.string().allow(null, '').optional(),
 }).unknown(false); // No permitir campos desconocidos
 
@@ -432,7 +572,31 @@ router.patch('/episodios/:id', requireAuth, requireRole(['finanzas', 'FINANZAS']
     const updateData: any = {};
     for (const [key, value] of Object.entries(validatedValue)) {
       const dbKey = finanzasFieldMapping[key] || key;
-      updateData[dbKey] = value;
+      
+      // Normalizar campos antes de guardar
+      if (dbKey === 'atSn') {
+        // Normalizar 'at': aceptar boolean o "S"/"N", convertir a boolean para BD
+        if (value === true || value === 'S' || value === 's') {
+          updateData.atSn = true;
+        } else if (value === false || value === 'N' || value === 'n') {
+          updateData.atSn = false;
+        }
+      } else if (dbKey === 'estadoRn') {
+        // Normalizar estadoRN: vacío o inválido → null
+        if (value && typeof value === 'string' && ['Aprobado', 'Pendiente', 'Rechazado'].includes(value)) {
+          updateData.estadoRn = value;
+        } else {
+          updateData.estadoRn = null;
+        }
+      } else if (typeof value === 'string' && key.match(/^(montoAT|montoRN|pagoDemora|pagoOutlierSup|precioBaseTramo|valorGRD|montoFinal|diasDemoraRescate)$/i)) {
+        // Convertir strings numéricos a números
+        const numValue = dbKey === 'diasDemoraRescate' ? parseInt(value) : parseFloat(value);
+        if (!isNaN(numValue)) {
+          updateData[dbKey] = numValue;
+        }
+      } else {
+        updateData[dbKey] = value;
+      }
     }
 
     // IGNORAR montoFinal si viene en el request (se calculará automáticamente)
@@ -551,50 +715,8 @@ router.patch('/episodios/:id', requireAuth, requireRole(['finanzas', 'FINANZAS']
       },
     });
 
-    // Formatear respuesta según especificaciones
-    const response = {
-      episodio: updated.episodioCmdb || '',
-      rut: updated.paciente?.rut || '',
-      nombre: updated.paciente?.nombre || '',
-      fechaIngreso: updated.fechaIngreso ? updated.fechaIngreso.toISOString().split('T')[0] : null,
-      fechaAlta: updated.fechaAlta ? updated.fechaAlta.toISOString().split('T')[0] : null,
-      servicioAlta: updated.servicioAlta || '',
-      
-      // Campos editables por finanzas
-      estadoRN: updated.estadoRn,
-      at: updated.atSn,
-      atDetalle: updated.atDetalle,
-      montoAT: updated.montoAt ? Number(updated.montoAt) : null,
-      montoRN: updated.montoRn ? Number(updated.montoRn) : null,
-      diasDemoraRescate: updated.diasDemoraRescate,
-      pagoDemora: updated.pagoDemoraRescate ? Number(updated.pagoDemoraRescate) : null,
-      pagoOutlierSup: updated.pagoOutlierSuperior ? Number(updated.pagoOutlierSuperior) : null,
-      precioBaseTramo: updated.precioBaseTramo ? Number(updated.precioBaseTramo) : null,
-      valorGRD: updated.valorGrd ? Number(updated.valorGrd) : null,
-      montoFinal: updated.montoFinal ? Number(updated.montoFinal) : null,
-      documentacion: updated.documentacion 
-        ? (typeof updated.documentacion === 'string' 
-            ? updated.documentacion 
-            : (typeof updated.documentacion === 'object' && updated.documentacion !== null
-                ? ('texto' in updated.documentacion 
-                    ? updated.documentacion.texto as string
-                    : JSON.stringify(updated.documentacion))
-                : String(updated.documentacion)))
-        : null,
-      
-      // Campos de solo lectura
-      grdCodigo: updated.grd?.codigo || '',
-      peso: updated.pesoGrd ? Number(updated.pesoGrd) : null,
-      inlierOutlier: updated.inlierOutlier || '',
-      grupoDentroNorma: updated.grupoEnNorma,
-      diasEstada: updated.diasEstada,
-      
-      // Otros campos del episodio
-      centro: updated.centro,
-      numeroFolio: updated.numeroFolio,
-      tipoEpisodio: updated.tipoEpisodio,
-      id: updated.id,
-    };
+    // Normalizar y formatear respuesta según especificaciones
+    const response = normalizeEpisodeResponse(updated);
 
     res.json(response);
   } catch (error: any) {
