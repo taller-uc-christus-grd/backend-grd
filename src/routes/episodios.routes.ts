@@ -374,6 +374,206 @@ router.get('/episodios/final', requireAuth, async (req: Request, res: Response) 
   }
 });
 
+// ===================================================================
+// ==================== ENDPOINTS DE DOCUMENTOS =====================
+// IMPORTANTE: Estas rutas deben ir ANTES de /episodios/:id para evitar conflictos
+// ===================================================================
+
+// Configuración de Multer para documentos (usando memoryStorage para Cloudinary)
+const documentosStorage = multer.memoryStorage();
+const documentosUpload = multer({
+  storage: documentosStorage,
+  limits: { fileSize: 50 * 1024 * 1024 }, // 50MB límite
+});
+
+/**
+ * POST /api/episodios/:episodioId/documentos
+ * Sube un archivo a Cloudinary y lo asocia al episodio
+ * Body: FormData con file y episodioId
+ * Response: DocumentoCloudinary
+ */
+router.post(
+  '/episodios/:episodioId/documentos',
+  requireAuth,
+  documentosUpload.single('file'),
+  async (req: Request, res: Response) => {
+    try {
+      const { episodioId } = req.params;
+
+      if (!req.file) {
+        return res.status(400).json({ error: 'No se proporcionó ningún archivo' });
+      }
+
+      // Verificar que el episodio exista
+      const episodio = await prisma.episodio.findUnique({
+        where: { id: parseInt(episodioId) },
+      });
+
+      if (!episodio) {
+        return res.status(404).json({ error: 'Episodio no encontrado' });
+      }
+
+      // Preparar nombre del archivo (sin extensión para public_id)
+      const originalName = req.file.originalname;
+      const extension = path.extname(originalName);
+      const nombreSinExtension = path.basename(originalName, extension);
+      // Limpiar nombre para que sea válido en Cloudinary (eliminar caracteres especiales)
+      const nombreArchivoLimpio = nombreSinExtension.replace(/[^a-zA-Z0-9_-]/g, '_');
+
+      // Estructura según especificación: folder: episodios/{episodioId}, public_id: episodios/{episodioId}/{nombreArchivo}
+      const folder = `episodios/${episodioId}`;
+      const publicId = `episodios/${episodioId}/${nombreArchivoLimpio}`;
+
+      // Subir archivo a Cloudinary
+      const result: any = await uploadToCloudinary(req.file.buffer, {
+        folder: folder,
+        public_id: publicId,
+        resource_type: 'auto', // Detecta automáticamente el tipo (PDF, imagen, etc.)
+      });
+
+      // Guardar en la base de datos
+      const documento = await prisma.documentoCloudinary.create({
+        data: {
+          nombre: originalName,
+          publicId: result.public_id,
+          url: result.secure_url,
+          formato: extension.substring(1).toLowerCase(), // Sin el punto
+          tamano: req.file.size,
+          episodioId: parseInt(episodioId),
+        },
+      });
+
+      // Formatear respuesta según tipo DocumentoCloudinary
+      const response = {
+        id: documento.id,
+        nombre: documento.nombre,
+        publicId: documento.publicId,
+        url: documento.url,
+        formato: documento.formato,
+        tamano: documento.tamano,
+        uploadedAt: documento.uploadedAt.toISOString(),
+      };
+
+      res.status(201).json(response);
+    } catch (error: any) {
+      console.error('Error subiendo documento:', error);
+      res.status(500).json({
+        error: 'Error interno al subir el documento',
+        message: error.message || 'Error desconocido',
+      });
+    }
+  }
+);
+
+/**
+ * GET /api/episodios/:episodioId/documentos
+ * Obtiene todos los documentos de un episodio
+ * Response: Array de DocumentoCloudinary
+ */
+router.get('/episodios/:episodioId/documentos', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const { episodioId } = req.params;
+
+    // Verificar que el episodio exista
+    const episodio = await prisma.episodio.findUnique({
+      where: { id: parseInt(episodioId) },
+    });
+
+    if (!episodio) {
+      return res.status(404).json({ error: 'Episodio no encontrado' });
+    }
+
+    // Obtener documentos del episodio
+    const documentos = await prisma.documentoCloudinary.findMany({
+      where: { episodioId: parseInt(episodioId) },
+      orderBy: { uploadedAt: 'desc' },
+    });
+
+    // Formatear respuesta según tipo DocumentoCloudinary
+    const response = documentos.map((doc) => ({
+      id: doc.id,
+      nombre: doc.nombre,
+      publicId: doc.publicId,
+      url: doc.url,
+      formato: doc.formato,
+      tamano: doc.tamano,
+      uploadedAt: doc.uploadedAt.toISOString(),
+    }));
+
+    res.json(response);
+  } catch (error: any) {
+    console.error('Error obteniendo documentos:', error);
+    res.status(500).json({
+      error: 'Error interno al obtener documentos',
+      message: error.message || 'Error desconocido',
+    });
+  }
+});
+
+/**
+ * DELETE /api/episodios/:episodioId/documentos/:documentoId
+ * Elimina un documento de Cloudinary usando public_id
+ * Response: 204 No Content
+ */
+router.delete(
+  '/episodios/:episodioId/documentos/:documentoId',
+  requireAuth,
+  async (req: Request, res: Response) => {
+    try {
+      const { episodioId, documentoId } = req.params;
+
+      // Verificar que el episodio exista
+      const episodio = await prisma.episodio.findUnique({
+        where: { id: parseInt(episodioId) },
+      });
+
+      if (!episodio) {
+        return res.status(404).json({ error: 'Episodio no encontrado' });
+      }
+
+      // Buscar el documento
+      const documento = await prisma.documentoCloudinary.findUnique({
+        where: { id: parseInt(documentoId) },
+      });
+
+      if (!documento) {
+        return res.status(404).json({ error: 'Documento no encontrado' });
+      }
+
+      // Verificar que el documento pertenezca al episodio
+      if (documento.episodioId !== parseInt(episodioId)) {
+        return res.status(400).json({ error: 'El documento no pertenece a este episodio' });
+      }
+
+      // Eliminar de Cloudinary usando public_id
+      try {
+        await cloudinary.uploader.destroy(documento.publicId);
+      } catch (cloudinaryError: any) {
+        console.error('Error eliminando de Cloudinary:', cloudinaryError);
+        // Continuar con la eliminación de la BD aunque falle en Cloudinary
+        // (el archivo puede no existir ya en Cloudinary)
+      }
+
+      // Eliminar de la base de datos
+      await prisma.documentoCloudinary.delete({
+        where: { id: parseInt(documentoId) },
+      });
+
+      res.status(204).send();
+    } catch (error: any) {
+      console.error('Error eliminando documento:', error);
+      res.status(500).json({
+        error: 'Error interno al eliminar documento',
+        message: error.message || 'Error desconocido',
+      });
+    }
+  }
+);
+
+// ===================================================================
+// RUTAS GENÉRICAS DE EPISODIOS (deben ir después de las específicas)
+// ===================================================================
+
 // Obtener episodio por id (AHORA DESDE PRISMA) - Soporta ID numérico o episodioCmdb
 router.get('/episodios/:id', requireAuth, async (req: Request, res: Response) => {
   try {
@@ -1088,200 +1288,5 @@ router.post('/episodios/import', requireAuth, upload.single('file'), async (req:
     });
   }
 });
-
-// ===================================================================
-// ==================== ENDPOINTS DE DOCUMENTOS =====================
-// ===================================================================
-
-// Configuración de Multer para documentos (usando memoryStorage para Cloudinary)
-const documentosStorage = multer.memoryStorage();
-const documentosUpload = multer({
-  storage: documentosStorage,
-  limits: { fileSize: 50 * 1024 * 1024 }, // 50MB límite
-});
-
-/**
- * POST /api/episodios/:episodioId/documentos
- * Sube un archivo a Cloudinary y lo asocia al episodio
- * Body: FormData con file y episodioId
- * Response: DocumentoCloudinary
- */
-router.post(
-  '/episodios/:episodioId/documentos',
-  requireAuth,
-  documentosUpload.single('file'),
-  async (req: Request, res: Response) => {
-    try {
-      const { episodioId } = req.params;
-
-      if (!req.file) {
-        return res.status(400).json({ error: 'No se proporcionó ningún archivo' });
-      }
-
-      // Verificar que el episodio exista
-      const episodio = await prisma.episodio.findUnique({
-        where: { id: parseInt(episodioId) },
-      });
-
-      if (!episodio) {
-        return res.status(404).json({ error: 'Episodio no encontrado' });
-      }
-
-      // Preparar nombre del archivo (sin extensión para public_id)
-      const originalName = req.file.originalname;
-      const extension = path.extname(originalName);
-      const nombreSinExtension = path.basename(originalName, extension);
-      // Limpiar nombre para que sea válido en Cloudinary (eliminar caracteres especiales)
-      const nombreArchivoLimpio = nombreSinExtension.replace(/[^a-zA-Z0-9_-]/g, '_');
-
-      // Estructura según especificación: folder: episodios/{episodioId}, public_id: episodios/{episodioId}/{nombreArchivo}
-      const folder = `episodios/${episodioId}`;
-      const publicId = `episodios/${episodioId}/${nombreArchivoLimpio}`;
-
-      // Subir archivo a Cloudinary
-      const result: any = await uploadToCloudinary(req.file.buffer, {
-        folder: folder,
-        public_id: publicId,
-        resource_type: 'auto', // Detecta automáticamente el tipo (PDF, imagen, etc.)
-      });
-
-      // Guardar en la base de datos
-      const documento = await prisma.documentoCloudinary.create({
-        data: {
-          nombre: originalName,
-          publicId: result.public_id,
-          url: result.secure_url,
-          formato: extension.substring(1).toLowerCase(), // Sin el punto
-          tamano: req.file.size,
-          episodioId: parseInt(episodioId),
-        },
-      });
-
-      // Formatear respuesta según tipo DocumentoCloudinary
-      const response = {
-        id: documento.id,
-        nombre: documento.nombre,
-        publicId: documento.publicId,
-        url: documento.url,
-        formato: documento.formato,
-        tamano: documento.tamano,
-        uploadedAt: documento.uploadedAt.toISOString(),
-      };
-
-      res.status(201).json(response);
-    } catch (error: any) {
-      console.error('Error subiendo documento:', error);
-      res.status(500).json({
-        error: 'Error interno al subir el documento',
-        message: error.message || 'Error desconocido',
-      });
-    }
-  }
-);
-
-/**
- * GET /api/episodios/:episodioId/documentos
- * Obtiene todos los documentos de un episodio
- * Response: Array de DocumentoCloudinary
- */
-router.get('/episodios/:episodioId/documentos', requireAuth, async (req: Request, res: Response) => {
-  try {
-    const { episodioId } = req.params;
-
-    // Verificar que el episodio exista
-    const episodio = await prisma.episodio.findUnique({
-      where: { id: parseInt(episodioId) },
-    });
-
-    if (!episodio) {
-      return res.status(404).json({ error: 'Episodio no encontrado' });
-    }
-
-    // Obtener documentos del episodio
-    const documentos = await prisma.documentoCloudinary.findMany({
-      where: { episodioId: parseInt(episodioId) },
-      orderBy: { uploadedAt: 'desc' },
-    });
-
-    // Formatear respuesta según tipo DocumentoCloudinary
-    const response = documentos.map((doc) => ({
-      id: doc.id,
-      nombre: doc.nombre,
-      publicId: doc.publicId,
-      url: doc.url,
-      formato: doc.formato,
-      tamano: doc.tamano,
-      uploadedAt: doc.uploadedAt.toISOString(),
-    }));
-
-    res.json(response);
-  } catch (error: any) {
-    console.error('Error obteniendo documentos:', error);
-    res.status(500).json({
-      error: 'Error interno al obtener documentos',
-      message: error.message || 'Error desconocido',
-    });
-  }
-});
-
-/**
- * DELETE /api/episodios/:episodioId/documentos/:documentoId
- * Elimina un documento de Cloudinary usando public_id
- * Response: 204 No Content
- */
-router.delete(
-  '/episodios/:episodioId/documentos/:documentoId',
-  requireAuth,
-  async (req: Request, res: Response) => {
-    try {
-      const { episodioId, documentoId } = req.params;
-
-      // Verificar que el episodio exista
-      const episodio = await prisma.episodio.findUnique({
-        where: { id: parseInt(episodioId) },
-      });
-
-      if (!episodio) {
-        return res.status(404).json({ error: 'Episodio no encontrado' });
-      }
-
-      // Buscar el documento
-      const documento = await prisma.documentoCloudinary.findUnique({
-        where: { id: parseInt(documentoId) },
-      });
-
-      if (!documento) {
-        return res.status(404).json({ error: 'Documento no encontrado' });
-      }
-
-      // Verificar que el documento pertenezca al episodio
-      if (documento.episodioId !== parseInt(episodioId)) {
-        return res.status(400).json({ error: 'El documento no pertenece a este episodio' });
-      }
-
-      // Eliminar de Cloudinary usando public_id
-      try {
-        await cloudinary.uploader.destroy(documento.publicId);
-      } catch (cloudinaryError: any) {
-        console.error('Error eliminando de Cloudinary:', cloudinaryError);
-        // Continuar con la eliminación de la BD aunque falle en Cloudinary
-        // (el archivo puede no existir ya en Cloudinary)
-      }
-
-      // Eliminar de la base de datos
-      await prisma.documentoCloudinary.delete({
-        where: { id: parseInt(documentoId) },
-      });
-
-      res.status(204).send();
-    } catch (error: any) {
-      console.error('Error eliminando documento:', error);
-      res.status(500).json({
-        error: 'Error interno al eliminar documento',
-        message: error.message || 'Error desconocido',
-      });
-    }
-  }
-);
 
 export default router;
