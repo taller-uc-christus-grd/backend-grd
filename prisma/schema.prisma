@@ -141,15 +141,13 @@ model LogSistema {
 }
 
 model DocumentoCloudinary {
-  id              Int      @id @default(autoincrement())
-  nombre          String
-  publicId        String   @unique // public_id de Cloudinary
-  url             String   // URL del archivo en Cloudinary
-  formato         String?  // Extensión del archivo (pdf, jpg, etc.)
-  tamano          Int?     // Tamaño en bytes
-  tamanoFormateado String? // Tamaño formateado (ej: "2.5 MB")
-  uploadedAt      DateTime @default(now()) // Fecha de subida (puede ser personalizada)
-  usuario         String?  // Email del usuario que subió el documento
+  id          Int      @id @default(autoincrement())
+  nombre      String
+  publicId    String   @unique // public_id de Cloudinary
+  url         String   // URL del archivo en Cloudinary
+  formato     String?  // Extensión del archivo (pdf, jpg, etc.)
+  tamano      Int?     // Tamaño en bytes
+  uploadedAt  DateTime @default(now())
 
   episodioId Int
   episodio   Episodio @relation(fields: [episodioId], references: [id], onDelete: Cascade)
