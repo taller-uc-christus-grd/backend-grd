@@ -3,7 +3,7 @@ import bcrypt from 'bcryptjs';
 import { prisma } from '../db/client';
 import { logAdminAction } from '../utils/logger';
 
-export async function listUsers(_req: Request, res: Response) {
+export async function listUsers(req: Request, res: Response) {
   try {
     const users = await prisma.usuario.findMany({
       select: {
