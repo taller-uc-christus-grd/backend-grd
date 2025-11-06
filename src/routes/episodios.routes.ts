@@ -46,6 +46,7 @@ const fieldMapping: Record<string, string> = {
   pagoDemora: 'pagoDemoraRescate',
   pagoOutlierSup: 'pagoOutlierSuperior',
   at: 'atSn', // 'at' del frontend se mapea a 'atSn' en la BD
+  validado: 'validado',
 };
 
 // Función para mapear campos del frontend a la base de datos
@@ -219,6 +220,7 @@ const episodioSchema = Joi.object({
   estadoRn: Joi.string().optional().allow(null),
   // Campos del frontend (camelCase con mayúsculas)
   estadoRN: Joi.string().optional().allow(null), // Alias para estadoRn
+  validado: Joi.boolean().optional().allow(null),
   atSn: Joi.boolean().optional().allow(null),
   at: Joi.boolean().optional().allow(null), // Alias para atSn
   atDetalle: Joi.string().optional().allow(null),
@@ -345,6 +347,7 @@ router.get('/episodios/final', requireAuth, async (req: Request, res: Response) 
         montoRN: normalized.montoRN || 0, // Para compatibilidad con el formato anterior
         inlierOutlier: normalized.inlierOutlier || '',
         // Agregar campos normalizados adicionales si el frontend los necesita
+        validado: normalized.validado,
         estadoRN: normalized.estadoRN,
         at: normalized.at,
         montoAT: normalized.montoAT,
@@ -822,17 +825,27 @@ const finanzasFieldMapping: Record<string, string> = {
 };
 
 // Actualizar episodio parcialmente (PATCH) - Funcionalidad de Finanzas
-router.patch('/episodios/:id', requireAuth, requireRole(['finanzas', 'FINANZAS']), async (req: Request, res: Response) => {
+router.patch('/episodios/:id', 
+  requireAuth, 
+  // 1. MODIFICACIÓN: Permitir a 'gestion' además de 'finanzas'
+  requireRole(['finanzas', 'FINANZAS', 'gestion', 'GESTION']), 
+  async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     
     // Ignorar valorGRD si viene en el request (se calculará automáticamente)
     const requestBody = { ...req.body };
     delete requestBody.valorGRD;
-    
+
+    // 2. MODIFICACIÓN: "Rescatar" el campo 'validado' (de gestión) ANTES de la validación
+    const validadoValue = requestBody.validado;
+    // Lo quitamos temporalmente para que 'finanzasSchema' no lo elimine con stripUnknown
+    delete requestBody.validado; 
+
+
     // Validar campos según esquema de finanzas (con nombres del frontend)
     const { error, value: validatedValue } = finanzasSchema.validate(requestBody, {
-      stripUnknown: true,
+      stripUnknown: true, // Esto limpia SOLO los campos que no son de finanzas
       abortEarly: false,
       presence: 'optional',
     });
@@ -856,7 +869,22 @@ router.patch('/episodios/:id', requireAuth, requireRole(['finanzas', 'FINANZAS']
       });
     }
 
-    // Si no hay campos para actualizar, retornar error
+    // 3. MODIFICACIÓN: Re-inyectar 'validado' (de gestión) DESPUÉS de la validación
+    if (validadoValue !== undefined) {
+      // Validamos 'validado' manualmente aquí
+      if (typeof validadoValue === 'boolean' || validadoValue === null) {
+        validatedValue.validado = validadoValue; // Se añade al objeto de valores válidos
+      } else {
+        return res.status(400).json({
+          message: 'El campo "validado" debe ser true, false, o null.',
+          error: 'ValidationError',
+          field: 'validado',
+        });
+      }
+    }
+
+    // 4. MODIFICACIÓN: Mover este chequeo DESPUÉS de la re-inyección de 'validado'
+    // Si no hay campos para actualizar (ni de finanzas, ni 'validado'), retornar error
     if (Object.keys(validatedValue).length === 0) {
       return res.status(400).json({ 
         message: 'No se proporcionaron campos para actualizar',
@@ -864,9 +892,17 @@ router.patch('/episodios/:id', requireAuth, requireRole(['finanzas', 'FINANZAS']
       });
     }
 
+
     // Mapear campos del frontend a nombres de la base de datos
     const updateData: any = {};
     for (const [key, value] of Object.entries(validatedValue)) {
+      
+      // 5. MODIFICACIÓN: Añadir 'validado' al mapeo
+      if (key === 'validado') {
+        updateData.validado = value; // Se llama igual en la DB
+        continue; // Saltar el resto del loop para esta clave
+      }
+
       const dbKey = finanzasFieldMapping[key] || key;
       
       // Normalizar campos antes de guardar
@@ -942,20 +978,9 @@ router.patch('/episodios/:id', requireAuth, requireRole(['finanzas', 'FINANZAS']
     const idNum = parseInt(id);
     let episodio;
 
-    // Intentar buscar primero por episodioCmdb (el campo que usa el frontend)
-    // Esto es importante porque el frontend envía el valor del campo "episodio" del objeto
-    episodio = await prisma.episodio.findFirst({
-      where: { episodioCmdb: id },
-      include: {
-        paciente: true,
-        grd: true,
-        diagnosticos: true,
-        respaldos: true,
-      },
-    });
-
-    // Si no se encuentra por episodioCmdb y el ID es numérico, intentar por id interno
-    if (!episodio && !isNaN(idNum)) {
+    // 6. MODIFICACIÓN: Priorizar la búsqueda por 'id' numérico, ya que el frontend
+    // debería estar enviando el 'id' de la DB (ej. 123) y no el 'episodioCmdb' (ej. EP001)
+    if (!isNaN(idNum)) {
       episodio = await prisma.episodio.findUnique({
         where: { id: idNum },
         include: {
@@ -967,13 +992,25 @@ router.patch('/episodios/:id', requireAuth, requireRole(['finanzas', 'FINANZAS']
       });
     }
 
+    // Si no se encuentra por id interno (como fallback), intentar por episodioCmdb
+    if (!episodio) {
+      episodio = await prisma.episodio.findFirst({
+        where: { episodioCmdb: id },
+        include: {
+          paciente: true,
+          grd: true,
+          diagnosticos: true,
+          respaldos: true,
+        },
+      });
+    }
+
+
     if (!episodio) {
       // Log para debugging
       console.log(`🔍 PATCH /api/episodios/${id}: Episodio no encontrado`);
-      console.log(`   - Buscado por episodioCmdb: "${id}"`);
-      if (!isNaN(idNum)) {
-        console.log(`   - Buscado por id interno: ${idNum}`);
-      }
+      console.log(`   - Buscado por id interno: ${idNum}`);
+      console.log(`   - Buscado por episodioCmdb: "${id}"`);
       
       return res.status(404).json({
         message: `El episodio ${id} no fue encontrado`,
@@ -984,8 +1021,8 @@ router.patch('/episodios/:id', requireAuth, requireRole(['finanzas', 'FINANZAS']
     // Log para debugging (solo en desarrollo)
     if (process.env.NODE_ENV === 'development') {
       console.log(`✅ PATCH /api/episodios/${id}: Episodio encontrado`);
-      console.log(`   - ID interno: ${episodio.id}`);
-      console.log(`   - episodioCmdb: ${episodio.episodioCmdb}`);
+      console.log(`   - ID interno: ${episodio.id}`);
+      console.log(`   - episodioCmdb: ${episodio.episodioCmdb}`);
     }
 
     // Obtener valores actuales del episodio
@@ -1047,23 +1084,6 @@ router.patch('/episodios/:id', requireAuth, requireRole(['finanzas', 'FINANZAS']
       message: 'Error del servidor. Por favor, intenta nuevamente más tarde.',
       error: 'InternalServerError'
     });
-  }
-});
-
-// Eliminar episodio (AHORA EN PRISMA)
-router.delete('/episodios/:id', requireAuth, async (req: Request, res: Response) => {
-  try {
-    const { id } = req.params;
-    await prisma.episodio.delete({
-      where: { id: parseInt(id) },
-    });
-    res.json({ success: true, message: 'Episodio eliminado' });
-  } catch (error: any) {
-    if (error.code === 'P2025') {
-      return res.status(404).json({ error: 'Episodio no encontrado' });
-    }
-    console.error(error);
-    res.status(500).json({ error: 'Error al eliminar episodio' });
   }
 });
 
