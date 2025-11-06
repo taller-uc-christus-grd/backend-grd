@@ -100,3 +100,29 @@ export async function logFileUpload(
   });
 }
 
+/**
+ * Helper para crear logs de descarga de archivos
+ */
+export async function logFileDownload(
+  userId: number,
+  fileName: string,
+  fileType: string,
+  fileSize?: number,
+  filters?: Record<string, any>
+) {
+  await createLog({
+    userId,
+    endpoint: '/api/export',
+    action: 'Descarga de archivo',
+    level: 'success',
+    message: `Archivo ${fileName} descargado (${fileType})`,
+    metadata: {
+      fileName,
+      fileType,
+      fileSize: fileSize || null,
+      filters: filters || {},
+      timestamp: new Date().toISOString()
+    }
+  });
+}
+

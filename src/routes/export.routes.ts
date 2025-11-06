@@ -4,6 +4,7 @@ import { requireAuth } from '../middlewares/auth';
 import { prisma } from '../db/client';
 import type { Prisma } from '@prisma/client';
 import { uploadToCloudinary } from '../config/cloudinary';
+import { logFileDownload } from '../utils/logger';
 
 const router = Router();
 
@@ -180,6 +181,17 @@ router.get('/export', requireAuth, async (req: Request, res: Response) => {
 
     // Enviar archivo como descarga
     const fileName = `grd_export_${new Date().toISOString().slice(0, 10)}.xlsx`;
+    
+    // Log de descarga de archivo
+    const userId = parseInt(req.user!.id);
+    await logFileDownload(
+      userId,
+      fileName,
+      'xlsx',
+      buf.length,
+      { desde, hasta, centro, totalEpisodios: episodiosDB.length }
+    );
+    
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
     return res.send(buf);

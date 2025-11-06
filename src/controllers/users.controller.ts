@@ -18,9 +18,8 @@ export async function listUsers(req: Request, res: Response) {
     });
     const usersLowercase = users.map(u => ({ ...u, rol: u.rol.toLowerCase() }));
     
-    // Log de acción administrativa
-    const userId = parseInt(req.user!.id);
-    await logAdminAction(userId, 'Listado de usuarios consultado', `Total de usuarios: ${users.length}`);
+    // No logueamos listUsers porque se llama frecuentemente al cargar la página
+    // Solo logueamos acciones que modifican datos (crear, editar, eliminar)
     
     return res.json(usersLowercase);
   } catch (error: any) {
