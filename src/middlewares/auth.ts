@@ -35,7 +35,11 @@ export function requireRole(roles: string[]) {
       return res.status(401).json({ message: 'No autenticado' });
     }
 
-    if (!roles.includes(req.user.role)) {
+    // Normalizar roles a mayúsculas para comparación
+    const userRoleUpper = req.user.role.toUpperCase();
+    const rolesUpper = roles.map(r => r.toUpperCase());
+
+    if (!rolesUpper.includes(userRoleUpper)) {
       return res.status(403).json({ message: 'Acceso denegado' });
     }
 

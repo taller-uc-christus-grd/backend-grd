@@ -52,19 +52,40 @@ export async function getLogs(req: Request, res: Response) {
     });
     
     // Formatear los logs para el frontend
-    const formattedLogs = logs.map(log => ({
-      id: log.id.toString(),
-      user: log.usuario?.email || 'sistema@ucchristus.cl',
-      userName: log.usuario?.nombre || 'Sistema',
-      action: log.action || log.message || 'Acción desconocida',
-      timestamp: log.createdAt.toISOString().replace('T', ' ').substring(0, 19),
-      type: mapLevelToType(log.level || 'info'),
-      ip: (log.metadata as any)?.ip || 'N/A',
-      details: log.message || log.endpoint || 'Sin detalles',
-      level: log.level || 'info',
-      endpoint: log.endpoint,
-      metadata: log.metadata
-    }));
+    const formattedLogs = logs.map(log => {
+      try {
+        return {
+          id: log.id.toString(),
+          user: log.usuario?.email || 'sistema@ucchristus.cl',
+          userName: log.usuario?.nombre || 'Sistema',
+          action: log.action || log.message || 'Acción desconocida',
+          timestamp: log.createdAt.toISOString().replace('T', ' ').substring(0, 19),
+          type: mapLevelToType(log.level || 'info'),
+          ip: (log.metadata && typeof log.metadata === 'object' && 'ip' in log.metadata) 
+            ? (log.metadata as any).ip 
+            : 'N/A',
+          details: log.message || log.endpoint || 'Sin detalles',
+          level: log.level || 'info',
+          endpoint: log.endpoint || null,
+          metadata: log.metadata || null
+        };
+      } catch (err) {
+        console.error('Error formateando log:', err, log);
+        return {
+          id: log.id.toString(),
+          user: 'sistema@ucchristus.cl',
+          userName: 'Sistema',
+          action: 'Error formateando log',
+          timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19),
+          type: 'error' as const,
+          ip: 'N/A',
+          details: 'Error al procesar este log',
+          level: 'error',
+          endpoint: null,
+          metadata: null
+        };
+      }
+    });
     
     // Obtener total de logs para paginación
     const total = await prisma.logSistema.count({ where });
@@ -77,7 +98,11 @@ export async function getLogs(req: Request, res: Response) {
     });
   } catch (error: any) {
     console.error('Error obteniendo logs:', error);
-    return res.status(500).json({ message: 'Error obteniendo logs del sistema' });
+    console.error('Stack trace:', error.stack);
+    return res.status(500).json({ 
+      message: 'Error obteniendo logs del sistema',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
   }
 }
 
