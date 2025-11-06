@@ -60,7 +60,7 @@ model Episodio {
   fechaAlta           DateTime?
   servicioAlta        String?
   estadoRn            String?
-  validado            Boolean?  @default(null) // null = Pendiente, true = Aprobado, false = Rechazado
+  validado            Boolean?  // null = Pendiente, true = Aprobado, false = Rechazado
   atSn                Boolean?
   atDetalle           String?
   montoAt             Decimal?  @db.Decimal(14, 2)
