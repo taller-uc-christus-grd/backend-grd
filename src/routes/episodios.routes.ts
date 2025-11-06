@@ -572,13 +572,36 @@ router.delete(
         return res.status(400).json({ error: 'El documento no pertenece a este episodio' });
       }
 
-      // Eliminar de Cloudinary usando public_id
+      // Determinar el resource_type basado en el formato del archivo
+      // PDFs y documentos se suben como 'raw', imágenes como 'image', videos como 'video'
+      const formato = documento.formato?.toLowerCase() || '';
+      let resourceType: 'image' | 'video' | 'raw' = 'raw'; // Por defecto raw
+      
+      if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg'].includes(formato)) {
+        resourceType = 'image';
+      } else if (['mp4', 'mov', 'avi', 'webm'].includes(formato)) {
+        resourceType = 'video';
+      }
+      // PDFs, DOCX, XLSX, etc. son 'raw' (por defecto)
+
+      // Eliminar de Cloudinary usando public_id y resource_type
+      let cloudinaryDeleted = false;
       try {
-        await cloudinary.uploader.destroy(documento.publicId);
+        const result = await cloudinary.uploader.destroy(documento.publicId, {
+          resource_type: resourceType,
+        });
+        
+        // El resultado de destroy puede ser { result: 'ok' } o { result: 'not found' }
+        cloudinaryDeleted = result.result === 'ok';
+        
+        if (!cloudinaryDeleted) {
+          console.warn(`Documento no encontrado en Cloudinary: ${documento.publicId} (result: ${result.result})`);
+          // Continuamos con la eliminación de BD aunque no esté en Cloudinary
+        }
       } catch (cloudinaryError: any) {
         console.error('Error eliminando de Cloudinary:', cloudinaryError);
         // Continuar con la eliminación de la BD aunque falle en Cloudinary
-        // (el archivo puede no existir ya en Cloudinary)
+        // (el archivo puede no existir ya en Cloudinary o haber un error de conexión)
       }
 
       // Eliminar de la base de datos
@@ -586,6 +609,8 @@ router.delete(
         where: { id: parseInt(documentoId) },
       });
 
+      // Si se eliminó correctamente de Cloudinary, devolver 204
+      // Si no estaba en Cloudinary pero se eliminó de BD, también 204
       res.status(204).send();
     } catch (error: any) {
       console.error('Error eliminando documento:', error);

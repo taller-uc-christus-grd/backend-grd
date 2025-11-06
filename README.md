@@ -33,16 +33,21 @@ Este backend maneja la autenticación de usuarios, la gestión de episodios clí
 3.  Crear el archivo `.env` (copiar de `.env.example`) y configurarlo:
     ```.env
     # URL de conexión a tu base de datos PostgreSQL
-    DATABASE_URL="postgresql://<usuario>@localhost:5432/grd?schema=public"
+    DATABASE_URL="postgresql://<usuario>:<password>@localhost:5432/grd?schema=public"
     
     # Puerto donde correrá el backend (Recomendado: 3000)
     PORT=3000
     
     # Secreto para firmar los JSON Web Tokens
-    JWT_SECRET=tu-secreto-muy-seguro
+    JWT_SECRET=tu-secreto-muy-seguro-aqui
     
     # Origen del frontend (ej. http://localhost:5173)
     CORS_ORIGIN=http://localhost:5173
+    
+    # Configuración de Cloudinary para almacenamiento de documentos
+    CLOUDINARY_CLOUD_NAME=tu-cloud-name
+    CLOUDINARY_API_KEY=tu-api-key
+    CLOUDINARY_API_SECRET=tu-api-secret
     ```
 
 4.  Ejecutar las migraciones de Prisma para crear las tablas en tu DB:
@@ -66,3 +71,22 @@ npm run build
 
 # Ejecutar en producción (después de 'npm run build')
 npm run start
+```
+
+## ☁️ Configuración en Railway (Producción)
+
+Para que el backend funcione correctamente en Railway, asegúrate de configurar las siguientes variables de entorno en el dashboard de Railway:
+
+1. Ve a tu proyecto en Railway
+2. Abre la pestaña **"Variables"**
+3. Agrega las siguientes variables:
+
+   - `DATABASE_URL` - URL de conexión a PostgreSQL (Railway la genera automáticamente si usas su servicio de DB)
+   - `PORT` - Puerto del servidor (Railway lo configura automáticamente)
+   - `JWT_SECRET` - Secreto para firmar tokens JWT
+   - `CORS_ORIGIN` - URL del frontend (ej. `https://tu-frontend.com`)
+   - `CLOUDINARY_CLOUD_NAME` - Nombre de tu cuenta en Cloudinary
+   - `CLOUDINARY_API_KEY` - API Key de Cloudinary
+   - `CLOUDINARY_API_SECRET` - API Secret de Cloudinary
+
+**⚠️ Importante:** Después de agregar las variables de Cloudinary, reinicia el servicio en Railway para que los cambios surtan efecto.
