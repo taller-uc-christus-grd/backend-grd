@@ -3,12 +3,20 @@ import * as XLSX from 'xlsx';
 import { requireAuth } from '../middlewares/auth';
 import { prisma } from '../db/client';
 import type { Prisma } from '@prisma/client';
-import { uploadToCloudinary } from '../config/cloudinary';
 import { logFileDownload } from '../utils/logger';
 
 const router = Router();
 
-// --- Funciones Helper (sin cambios) ---
+// ================== Cloudinary Safe Import ==================
+let uploadToCloudinary: any;
+try {
+  uploadToCloudinary = require('../config/cloudinary').uploadToCloudinary;
+  console.log('☁️ Cloudinary module cargado correctamente');
+} catch (err) {
+  console.warn('⚠️ No se pudo cargar Cloudinary. Puede faltar configuración en Railway:', err);
+}
+
+// ================== Funciones Helper ==================
 const toExcelDate = (d: string | Date | null | undefined): string => {
   if (!d) return '';
   const dt = new Date(d);
@@ -22,7 +30,6 @@ const getDiasEstada = (fechaIngreso: Date | null | undefined, fechaAlta: Date | 
   return diff >= 0 ? diff : 0;
 };
 
-// --- Lógica de Cálculo (sin cambios) ---
 function calcularValores(episodio: any): any {
   const { grd } = episodio;
   if (!grd) {
@@ -61,40 +68,30 @@ function calcularValores(episodio: any): any {
   };
 }
 
-// --- Endpoint de Exportación (¡MODIFICADO!) ---
+// ================== RUTA DE EXPORTACIÓN ==================
 router.get('/export', requireAuth, async (req: Request, res: Response) => {
   try {
-    // 1. OBTENEMOS LOS FILTROS DEL FRONTEND
     const { desde, hasta, centro, filtros } = req.query;
     console.log('📤 Iniciando exportación con filtros:', { filtros, desde, hasta, centro });
 
     const where: Prisma.EpisodioWhereInput = {};
 
-    // 2. ¡LÓGICA DE FILTRO DE GESTIÓN (VALIDADO)!
-    // Tu frontend envía: 'validados', 'no-validados', 'pendientes'
+    // --- Filtros de estado ---
     if (typeof filtros === 'string' && filtros.length > 0) {
       const filtrosArray = filtros.split(',');
       const whereValidado: Prisma.EpisodioWhereInput[] = [];
 
-      if (filtrosArray.includes('validados')) {
-        whereValidado.push({ validado: true });
-      }
-      if (filtrosArray.includes('no-validados')) {
-        whereValidado.push({ validado: false });
-      }
-      if (filtrosArray.includes('pendientes')) {
-        whereValidado.push({ validado: null });
-      }
-      
-      if (whereValidado.length > 0) {
-        where.OR = whereValidado;
-      }
+      if (filtrosArray.includes('validados')) whereValidado.push({ validado: true });
+      if (filtrosArray.includes('no-validados')) whereValidado.push({ validado: false });
+      if (filtrosArray.includes('pendientes')) whereValidado.push({ validado: null });
+
+      if (whereValidado.length > 0) where.OR = whereValidado;
     } else {
       console.warn('Exportación detenida: No se seleccionaron filtros de estado.');
       return res.status(400).json({ message: 'Debe seleccionar al menos un filtro de estado (Aprobados, Rechazados o Pendientes)' });
     }
 
-    // (Tu lógica de filtros de fecha y centro estaba perfecta)
+    // --- Filtros de fecha y centro ---
     if (desde || hasta) {
       const fechaFilter: Prisma.DateTimeFilter = {};
       if (desde) fechaFilter.gte = new Date(desde as string);
@@ -103,13 +100,10 @@ router.get('/export', requireAuth, async (req: Request, res: Response) => {
     }
     if (centro) where.centro = { contains: centro as string, mode: 'insensitive' };
 
-    // 3. BUSCAMOS EN LA BASE DE DATOS CON TODOS LOS FILTROS APLICADOS
+    // --- Consulta a BD ---
     const episodiosDB = await prisma.episodio.findMany({
-      where, // <-- ¡Aquí se aplican los filtros!
-      include: {
-        paciente: true,
-        grd: true,
-      },
+      where,
+      include: { paciente: true, grd: true },
       orderBy: { fechaIngreso: 'asc' },
     });
     console.log(`📊 Datos encontrados: ${episodiosDB.length} registros`);
@@ -118,29 +112,24 @@ router.get('/export', requireAuth, async (req: Request, res: Response) => {
       return res.status(404).json({ message: 'No se encontraron episodios con los filtros seleccionados' });
     }
 
+    // --- Transformar datos ---
     const rows = episodiosDB.map((e) => {
       const calculos = calcularValores(e);
-      
-      // 4. ¡LÓGICA DE VALIDADO CORREGIDA!
       let estadoValidado = 'Pendiente';
-      if (e.validado === true) {
-        estadoValidado = 'Aprobado';
-      } else if (e.validado === false) {
-        estadoValidado = 'Rechazado';
-      }
-      
+      if (e.validado === true) estadoValidado = 'Aprobado';
+      else if (e.validado === false) estadoValidado = 'Rechazado';
+
       return {
         ...e,
         ...calculos,
-        VALIDADO: estadoValidado, // <-- Usamos el valor real
-        paciente: e.paciente || {}, // Prevenir nulls
-        grd: e.grd || {}, // Prevenir nulls
+        VALIDADO: estadoValidado,
+        paciente: e.paciente || {},
+        grd: e.grd || {},
         grupo_norma_sn: e.grupoEnNorma ? 'S' : 'N',
         doc_necesaria: e.documentacion ? JSON.stringify(e.documentacion) : '',
       };
     });
 
-    // (Cabeceras sin cambios)
     const headers = [
       'Tipo dato', 'VALIDADO', 'Centro', 'N° Folio', 'Episodio', 'Rut Paciente', 'Nombre Paciente',
       'TIPO EPISODIO', 'Fecha de ingreso', 'Fecha Alta', 'Servicios de alta', 'ESTADO RN', 'AT (S/N)',
@@ -150,12 +139,10 @@ router.get('/export', requireAuth, async (req: Request, res: Response) => {
     ];
 
     const sheetData: any[][] = [headers];
-
-    // 5. ¡DATOS CORREGIDOS AL ESCRIBIR!
     rows.forEach((row) => {
       sheetData.push([
-        'manual', // Tipo dato ejemplo
-        row.VALIDADO || '', // <-- ¡AHORA SÍ ES EL VALOR REAL!
+        'manual',
+        row.VALIDADO || '',
         row.centro || '',
         row.numeroFolio || '',
         row.episodioCmdb || '',
@@ -190,42 +177,28 @@ router.get('/export', requireAuth, async (req: Request, res: Response) => {
     const ws = XLSX.utils.aoa_to_sheet(sheetData);
     XLSX.utils.book_append_sheet(wb, ws, 'FONASA');
 
-    // Generar Buffer
     const buf = XLSX.write(wb, { bookType: 'xlsx', type: 'buffer' });
     const fileName = `grd_export_${new Date().toISOString().slice(0, 10)}.xlsx`;
 
-    // ===================================================================
-    // =================== ¡LÓGICA 101% (V2) CORREGIDA! ==================
-    // ===================================================================
-    // Ya no usamos el `if (req.query.upload === 'true')`
-    // Ahora, SIEMPRE intentamos subir a Cloudinary en segundo plano.
-
+    // --- Subida opcional a Cloudinary ---
     if (typeof uploadToCloudinary === 'function') {
-      console.log('☁️ Iniciando subida asíncrona a Cloudinary...');
-      
-      // Usamos una función asíncrona autoejecutable (IIFE)
-      // Esto le dice a TypeScript: "Sé que no estoy esperando esta promesa,
-      // pero está bien, déjala correr en segundo plano".
       (async () => {
         try {
-          const result = await uploadToCloudinary(buf, { 
+          const result = await uploadToCloudinary(buf, {
             folder: 'grd_exports',
             public_id: fileName,
             resource_type: 'raw'
           });
           console.log(`✅ Exportación subida a Cloudinary: ${result.secure_url}`);
         } catch (err) {
-          // Si esto falla, solo lo logueamos. El usuario ya tiene su archivo.
-          console.error('❌ Error en subida asíncrona a Cloudinary:', err);
+          console.error('❌ Error en subida a Cloudinary:', err);
         }
-      })(); // Los () al final la ejecutan inmediatamente
-
+      })();
     } else {
-      console.warn('⚠️ La función uploadToCloudinary no está disponible. Saltando subida.');
+      console.warn('⚠️ uploadToCloudinary no disponible. Se omite subida.');
     }
-    // ===================================================================
 
-    // Enviar archivo como descarga (Tu lógica original estaba bien)
+    // --- Log y envío del archivo ---
     const userId = parseInt(req.user!.id);
     await logFileDownload(
       userId,
@@ -234,21 +207,18 @@ router.get('/export', requireAuth, async (req: Request, res: Response) => {
       buf.length,
       { desde, hasta, centro, filtros, totalEpisodios: episodiosDB.length }
     );
-    
+
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
     return res.send(buf);
 
   } catch (err: any) {
     console.error('Error en export route:', err);
-    // Asegurarse de enviar un JSON en caso de error
-    if (!res.headersSent) {
-      return res.status(500).json({ message: 'Error generando export' });
-    }
+    if (!res.headersSent) return res.status(500).json({ message: 'Error generando export' });
   }
 });
 
-// Ruta de Info
+// ================== Ruta de info ==================
 router.get('/export/info', (_req: Request, res: Response) => {
   res.json({
     endpoint: '/api/export',
