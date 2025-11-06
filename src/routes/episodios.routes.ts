@@ -192,6 +192,9 @@ function normalizeEpisodeResponse(episode: any): any {
     montoFinal: montoFinalCalculado, // SIEMPRE calculado automáticamente
     documentacion, // string o null
     
+    // Campo editable por gestión
+    validado: episode.validado ?? null, // boolean | null (null = Pendiente, true = Aprobado, false = Rechazado)
+    
     // Campos de solo lectura
     grdCodigo: episode.grd?.codigo || '',
     peso: toNumber(episode.pesoGrd), // SIEMPRE number o null
@@ -842,31 +845,36 @@ router.patch('/episodios/:id',
     // Lo quitamos temporalmente para que 'finanzasSchema' no lo elimine con stripUnknown
     delete requestBody.validado; 
 
-
     // Validar campos según esquema de finanzas (con nombres del frontend)
-    const { error, value: validatedValue } = finanzasSchema.validate(requestBody, {
-      stripUnknown: true, // Esto limpia SOLO los campos que no son de finanzas
-      abortEarly: false,
-      presence: 'optional',
-    });
-    
-    if (error) {
-      const errorDetails = error.details.map((d: Joi.ValidationErrorItem) => {
-        // Mensajes más descriptivos
-        if (d.path[0] === 'estadoRN') {
-          return 'Estado inválido. Use: Aprobado, Pendiente o Rechazado';
-        }
-        if (d.type === 'number.min') {
-          return `${d.path[0]} debe ser mayor o igual a 0`;
-        }
-        return d.message;
+    // Solo validar si hay campos de finanzas (no solo validado)
+    let validatedValue: any = {};
+    if (Object.keys(requestBody).length > 0) {
+      const { error, value } = finanzasSchema.validate(requestBody, {
+        stripUnknown: true, // Esto limpia SOLO los campos que no son de finanzas
+        abortEarly: false,
+        presence: 'optional',
       });
       
-      return res.status(400).json({
-        message: errorDetails[0] || 'Datos inválidos',
-        error: 'ValidationError',
-        field: error.details[0]?.path[0] || 'unknown',
-      });
+      if (error) {
+        const errorDetails = error.details.map((d: Joi.ValidationErrorItem) => {
+          // Mensajes más descriptivos
+          if (d.path[0] === 'estadoRN') {
+            return 'Estado inválido. Use: Aprobado, Pendiente o Rechazado';
+          }
+          if (d.type === 'number.min') {
+            return `${d.path[0]} debe ser mayor o igual a 0`;
+          }
+          return d.message;
+        });
+        
+        return res.status(400).json({
+          message: errorDetails[0] || 'Datos inválidos',
+          error: 'ValidationError',
+          field: error.details[0]?.path[0] || 'unknown',
+        });
+      }
+      
+      validatedValue = value || {};
     }
 
     // 3. MODIFICACIÓN: Re-inyectar 'validado' (de gestión) DESPUÉS de la validación
