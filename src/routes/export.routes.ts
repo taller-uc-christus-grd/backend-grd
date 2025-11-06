@@ -61,22 +61,19 @@ function calcularValores(episodio: any): any {
   };
 }
 
-// --- Endpoint de Exportación (¡MODIFICADO!) ---
+// --- Endpoint de Exportación (¡MODIFICADO CON UPLOAD ASÍNCRONO!) ---
 router.get('/export', requireAuth, async (req: Request, res: Response) => {
   try {
-    // 1. OBTENEMOS LOS FILTROS DEL FRONTEND
-    const { desde, hasta, centro, filtros } = req.query;
+    const { filtros, desde, hasta, centro } = req.query;
     console.log('📤 Iniciando exportación con filtros:', { filtros, desde, hasta, centro });
 
     const where: Prisma.EpisodioWhereInput = {};
 
-    // 2. ¡LÓGICA DE FILTRO DE GESTIÓN (VALIDADO)!
-    // Tu frontend envía: 'validados', 'no-validados', 'pendientes'
+    // Lógica de filtro de Gestión (validado)
     if (typeof filtros === 'string' && filtros.length > 0) {
       const filtrosArray = filtros.split(',');
       const whereValidado: Prisma.EpisodioWhereInput[] = [];
 
-      // Mapeamos los filtros del frontend al campo 'validado' (Boolean)
       if (filtrosArray.includes('validados')) {
         whereValidado.push({ validado: true });
       }
@@ -91,13 +88,11 @@ router.get('/export', requireAuth, async (req: Request, res: Response) => {
         where.OR = whereValidado;
       }
     } else {
-      // Si el frontend no envía filtros (ej. presiona el botón sin marcar nada)
-      // devolvemos un error 400.
       console.warn('Exportación detenida: No se seleccionaron filtros de estado.');
       return res.status(400).json({ message: 'Debe seleccionar al menos un filtro de estado (Aprobados, Rechazados o Pendientes)' });
     }
 
-    // (Tu lógica de filtros de fecha y centro estaba perfecta)
+    // (Lógica de filtros de fecha y centro)
     if (desde || hasta) {
       const fechaFilter: Prisma.DateTimeFilter = {};
       if (desde) fechaFilter.gte = new Date(desde as string);
@@ -106,9 +101,9 @@ router.get('/export', requireAuth, async (req: Request, res: Response) => {
     }
     if (centro) where.centro = { contains: centro as string, mode: 'insensitive' };
 
-    // 3. BUSCAMOS EN LA BASE DE DATOS CON TODOS LOS FILTROS APLICADOS
+    // (Obtención de datos de Prisma)
     const episodiosDB = await prisma.episodio.findMany({
-      where, // <-- ¡Aquí se aplican los filtros!
+      where,
       include: {
         paciente: true,
         grd: true,
@@ -117,35 +112,23 @@ router.get('/export', requireAuth, async (req: Request, res: Response) => {
     });
     console.log(`📊 Datos encontrados: ${episodiosDB.length} registros`);
 
-    // Si no hay nada, devolvemos 404
     if (episodiosDB.length === 0) {
       return res.status(404).json({ message: 'No se encontraron episodios con los filtros seleccionados' });
     }
 
+    // (Mapeo de filas)
     const rows = episodiosDB.map((e) => {
       const calculos = calcularValores(e);
-      
-      // 4. ¡LÓGICA DE VALIDADO CORREGIDA!
-      // Leemos el valor real de la base de datos
       let estadoValidado = 'Pendiente';
       if (e.validado === true) {
         estadoValidado = 'Aprobado';
       } else if (e.validado === false) {
         estadoValidado = 'Rechazado';
       }
-      
-      return {
-        ...e,
-        ...calculos,
-        VALIDADO: estadoValidado, // <-- Usamos el valor real
-        paciente: e.paciente || {}, // Prevenir nulls
-        grd: e.grd || {}, // Prevenir nulls
-        grupo_norma_sn: e.grupoEnNorma ? 'S' : 'N',
-        doc_necesaria: e.documentacion ? JSON.stringify(e.documentacion) : '',
-      };
+      return { ...e, ...calculos, VALIDADO: estadoValidado, paciente: e.paciente || {}, grd: e.grd || {}, grupo_norma_sn: e.grupoEnNorma ? 'S' : 'N', doc_necesaria: e.documentacion ? JSON.stringify(e.documentacion) : '' };
     });
 
-    // Cabeceras (sin cambios)
+    // (Creación de la hoja de Excel)
     const headers = [
       'Tipo dato', 'VALIDADO', 'Centro', 'N° Folio', 'Episodio', 'Rut Paciente', 'Nombre Paciente',
       'TIPO EPISODIO', 'Fecha de ingreso', 'Fecha Alta', 'Servicios de alta', 'ESTADO RN', 'AT (S/N)',
@@ -153,79 +136,75 @@ router.get('/export', requireAuth, async (req: Request, res: Response) => {
       'Pago demora rescate', 'Pago por outlier superior', 'DOCUMENTACIÓN NECESARIA', 'Inlier/outlier',
       'Grupo dentro de norma S/N', 'Dias de Estada', 'Precio Base por tramo correspondiente', 'Valor GRD', 'Monto Final'
     ];
-
     const sheetData: any[][] = [headers];
-
-    // 5. ¡DATOS CORREGIDOS AL ESCRIBIR!
     rows.forEach((row) => {
       sheetData.push([
-        'manual', // Tipo dato ejemplo
-        row.VALIDADO || '', // <-- ¡AHORA SÍ ES EL VALOR REAL!
-        row.centro || '',
-        row.numeroFolio || '',
-        row.episodioCmdb || '',
-        row.paciente.rut || '',
-        row.paciente.nombre || '',
-        row.tipoEpisodio || '',
-        toExcelDate(row.fechaIngreso),
-        toExcelDate(row.fechaAlta),
-        row.servicioAlta || '',
-        row.estadoRn || '',
-        row.atSn ? 'S' : 'N',
-        row.atDetalle || '',
-        Number(row.montoAt) || 0,
-        row.tipoAlta || '',
-        row.grd.codigo || '',
-        Number(row.grd.peso) || 0,
-        Number(row.montoRn) || 0, // <-- Tomamos el valor de la DB
-        Number(row.diasDemoraRescate) || 0,
-        Number(row.pagoDemoraRescate) || 0,
-        Number(row.pagoOutlierSuperior) || 0,
-        row.doc_necesaria || '',
-        row.inlierOutlier || '',
-        row.grupo_norma_sn || '',
-        Number(row.diasEstada) || 0,
-        Number(row.precioBaseTramo) || 0,
-        Number(row.valorGrd) || 0,
-        Number(row.montoFinal) || 0,
+        'manual', row.VALIDADO || '', row.centro || '', row.numeroFolio || '', row.episodioCmdb || '',
+        row.paciente.rut || '', row.paciente.nombre || '', row.tipoEpisodio || '',
+        toExcelDate(row.fechaIngreso), toExcelDate(row.fechaAlta), row.servicioAlta || '', row.estadoRn || '',
+        row.atSn ? 'S' : 'N', row.atDetalle || '', Number(row.montoAt) || 0, row.tipoAlta || '',
+        row.grd.codigo || '', Number(row.grd.peso) || 0, Number(row.montoRn) || 0,
+        Number(row.diasDemoraRescate) || 0, Number(row.pagoDemoraRescate) || 0, Number(row.pagoOutlierSuperior) || 0,
+        row.doc_necesaria || '', row.inlierOutlier || '', row.grupo_norma_sn || '', Number(row.diasEstada) || 0,
+        Number(row.precioBaseTramo) || 0, Number(row.valorGrd) || 0, Number(row.montoFinal) || 0,
       ]);
     });
-
+    
     const wb = XLSX.utils.book_new();
     const ws = XLSX.utils.aoa_to_sheet(sheetData);
     XLSX.utils.book_append_sheet(wb, ws, 'FONASA');
 
     // Generar Buffer
     const buf = XLSX.write(wb, { bookType: 'xlsx', type: 'buffer' });
-
-    // (Tu lógica de Cloudinary está bien, se queda igual)
-    if ((req.query as any).upload === 'true' && typeof uploadToCloudinary === 'function') {
-      // ...
-    }
-
-    // Enviar archivo como descarga
     const fileName = `grd_export_${new Date().toISOString().slice(0, 10)}.xlsx`;
-    
-    // (Tu lógica de log de descarga está bien, se queda igual)
+
+    // ===================================================================
+    // =================== ¡AQUÍ ESTÁ LA MAGIA DEL 101%! ==================
+    // ===================================================================
+    // Inicia la subida a Cloudinary pero NO LA ESPERA (fire-and-forget)
+    // Esto permite que la descarga del usuario comience de inmediato.
+    if (typeof uploadToCloudinary === 'function') {
+      console.log('☁️ Iniciando subida asíncrona a Cloudinary...');
+      uploadToCloudinary(buf, { 
+        folder: 'grd_exports', // Carpeta en Cloudinary
+        public_id: fileName,    // Nombre del archivo
+        resource_type: 'raw'    // 'raw' es para archivos no-media (como Excel)
+      })
+      .then(result => {
+        // La subida terminó en segundo plano
+        console.log(`✅ Exportación subida a Cloudinary: ${result.secure_url}`);
+        // Aquí podrías guardar 'result.secure_url' en una nueva tabla 'Exportaciones' si quisieras
+      })
+      .catch(err => {
+        // ¡Importante! Si la subida en segundo plano falla, solo lo logueamos.
+        // No podemos enviar un error al usuario porque ya le enviamos el archivo.
+        console.error('❌ Error en subida asíncrona a Cloudinary:', err);
+      });
+    }
+    // ===================================================================
+
+    // (Tu lógica de Log de descarga está perfecta)
     const userId = parseInt(req.user!.id);
     await logFileDownload(
       userId,
       fileName,
       'xlsx',
       buf.length,
-      { desde, hasta, centro, filtros, totalEpisodios: episodiosDB.length }
+      { filtros, desde, hasta, centro, totalEpisodios: episodiosDB.length }
     );
     
+    // Enviar archivo como descarga al usuario INMEDIATAMENTE
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
     return res.send(buf);
+
   } catch (err: any) {
     console.error('Error en export route:', err);
     return res.status(500).json({ message: 'Error generando export' });
   }
 });
 
-// Ruta de Info (sin cambios)
+// Ruta de Info (sin cambios, pero actualizada con el filtro)
 router.get('/export/info', (_req: Request, res: Response) => {
   res.json({
     endpoint: '/api/export',
@@ -233,7 +212,6 @@ router.get('/export/info', (_req: Request, res: Response) => {
     description: 'Exporta datos procesados en formato Excel FONASA',
     authentication: 'Requiere autenticación',
     parameters: {
-      // ¡Añadimos el nuevo filtro a la info!
       filtros: { type: 'string', format: 'validados,pendientes,no-validados' },
       desde: { type: 'string', format: 'YYYY-MM-DD' },
       hasta: { type: 'string', format: 'YYYY-MM-DD' },
