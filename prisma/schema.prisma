@@ -154,3 +154,15 @@ model DocumentoCloudinary {
 
   @@index([episodioId])
 }
+
+model ConfiguracionSistema {
+  id                Int      @id @default(autoincrement())
+  clave             String   @unique // Clave única de la configuración
+  valor             String   // Valor como string (se puede parsear según el tipo)
+  descripcion       String?
+  tipo              String?  @default("string") // string, number, boolean, json
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([clave])
+}

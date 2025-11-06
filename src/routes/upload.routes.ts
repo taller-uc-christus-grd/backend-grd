@@ -40,11 +40,31 @@ const fileFilter = (req: Request, file: Express.Multer.File, cb: multer.FileFilt
   }
 };
 
-const upload = multer({
-  storage,
-  fileFilter,
-  limits: { fileSize: 10 * 1024 * 1024, files: 1 }, // 10MB Límite
-});
+// Función para obtener el tamaño máximo de archivo desde la configuración
+async function getMaxFileSize(): Promise<number> {
+  try {
+    const config = await prisma.configuracionSistema.findUnique({
+      where: { clave: 'maxFileSizeMB' }
+    });
+    if (config && config.tipo === 'number') {
+      return parseInt(config.valor) * 1024 * 1024; // Convertir MB a bytes
+    }
+  } catch (error) {
+    console.error('Error obteniendo configuración de tamaño máximo:', error);
+  }
+  return 10 * 1024 * 1024; // Default: 10MB
+}
+
+// Crear upload middleware dinámico
+const createUpload = () => {
+  return multer({
+    storage,
+    fileFilter,
+    limits: { fileSize: 100 * 1024 * 1024, files: 1 }, // Límite temporal alto, se validará en el endpoint
+  });
+};
+
+const upload = createUpload();
 
 // --- Lógica de ETL (Adaptada de tus scripts) ---
 
@@ -216,6 +236,16 @@ router.post('/upload', requireAuth, upload.single('file'), async (req: Request, 
     if (!req.file) {
       return res.status(400).json({ error: 'No se proporcionó ningún archivo' });
     }
+
+    // Validar tamaño del archivo contra la configuración del sistema
+    const maxFileSize = await getMaxFileSize();
+    if (req.file.size > maxFileSize) {
+      const maxMB = maxFileSize / (1024 * 1024);
+      return res.status(400).json({ 
+        error: `El archivo excede el tamaño máximo permitido de ${maxMB}MB` 
+      });
+    }
+
     filePath = req.file.path;
     const ext = path.extname(req.file.originalname).toLowerCase();
 
@@ -297,13 +327,16 @@ router.post('/upload', requireAuth, upload.single('file'), async (req: Request, 
   }
 });
 
-router.get('/upload/info', (_req: Request, res: Response) => {
+router.get('/upload/info', async (_req: Request, res: Response) => {
+  const maxFileSize = await getMaxFileSize();
+  const maxMB = maxFileSize / (1024 * 1024);
+  
   res.json({
     endpoint: '/api/upload',
     method: 'POST',
     description: 'Sube y procesa CSV/Excel con datos clínicos',
     accepted_formats: ['CSV (.csv)', 'Excel (.xlsx, .xls)'],
-    max_file_size: '10MB'
+    max_file_size: `${maxMB}MB`
   });
 });
 
