@@ -449,6 +449,23 @@ router.post(
       const folder = `episodios/${episodioIdInterno}`;
       const publicId = `episodios/${episodioIdInterno}/${nombreArchivoLimpio}`;
 
+      // Obtener datos adicionales del FormData (tamaño formateado, fecha, usuario)
+      const tamanoFormateado = req.body.tamaño || req.body.tamano || null; // "2.5 MB"
+      const fechaStr = req.body.fecha || null; // ISO string
+      const usuarioEmail = req.body.usuario || null; // Email del usuario
+
+      // Parsear fecha si viene, sino usar la fecha actual
+      let fechaUpload: Date;
+      if (fechaStr) {
+        fechaUpload = new Date(fechaStr);
+        // Validar que la fecha sea válida
+        if (isNaN(fechaUpload.getTime())) {
+          fechaUpload = new Date(); // Si es inválida, usar fecha actual
+        }
+      } else {
+        fechaUpload = new Date();
+      }
+
       // Subir archivo a Cloudinary
       const result: any = await uploadToCloudinary(req.file.buffer, {
         folder: folder,
@@ -463,20 +480,23 @@ router.post(
           publicId: result.public_id,
           url: result.secure_url,
           formato: extension.substring(1).toLowerCase(), // Sin el punto
-          tamano: req.file.size,
+          tamano: req.file.size, // Tamaño en bytes
+          tamanoFormateado: tamanoFormateado, // Tamaño formateado del frontend
+          uploadedAt: fechaUpload, // Fecha personalizada del frontend
+          usuario: usuarioEmail, // Email del usuario
           episodioId: episodioIdInterno,
         },
       });
 
-      // Formatear respuesta según tipo DocumentoCloudinary
+      // Formatear respuesta según formato solicitado por el frontend
       const response = {
-        id: documento.id,
+        id: documento.id.toString(),
         nombre: documento.nombre,
-        publicId: documento.publicId,
+        fecha: documento.uploadedAt.toISOString(),
+        tamaño: documento.tamanoFormateado || `${(documento.tamano || 0) / (1024 * 1024)).toFixed(2)} MB`,
+        usuario: documento.usuario || '',
         url: documento.url,
-        formato: documento.formato,
-        tamano: documento.tamano,
-        uploadedAt: documento.uploadedAt.toISOString(),
+        public_id: documento.publicId,
       };
 
       res.status(201).json(response);
@@ -515,15 +535,15 @@ router.get('/episodios/:episodioId/documentos', requireAuth, async (req: Request
       orderBy: { uploadedAt: 'desc' },
     });
 
-    // Formatear respuesta según tipo DocumentoCloudinary
+    // Formatear respuesta según formato solicitado por el frontend
     const response = documentos.map((doc) => ({
-      id: doc.id,
+      id: doc.id.toString(),
       nombre: doc.nombre,
-      publicId: doc.publicId,
+      fecha: doc.uploadedAt.toISOString(),
+      tamaño: doc.tamanoFormateado || `${(doc.tamano || 0) / (1024 * 1024)).toFixed(2)} MB`,
+      usuario: doc.usuario || '',
       url: doc.url,
-      formato: doc.formato,
-      tamano: doc.tamano,
-      uploadedAt: doc.uploadedAt.toISOString(),
+      public_id: doc.publicId,
     }));
 
     res.json(response);
