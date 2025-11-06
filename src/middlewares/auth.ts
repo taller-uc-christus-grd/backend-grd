@@ -29,17 +29,28 @@ export function requireAuth(req: Request, res: Response, next: NextFunction) {
   }
 }
 
+// Función para normalizar roles: eliminar tildes, espacios, convertir a mayúsculas
+function normalizeRole(role: string): string {
+  return role
+    .toUpperCase()
+    .normalize('NFD') // Descompone caracteres con tildes (é -> e + ´)
+    .replace(/[\u0300-\u036f]/g, '') // Elimina los diacríticos (tildes)
+    .trim() // Elimina espacios al inicio y final
+    .replace(/\s+/g, ''); // Elimina espacios internos
+}
+
 export function requireRole(roles: string[]) {
   return (req: Request, res: Response, next: NextFunction) => {
     if (!req.user) {
       return res.status(401).json({ message: 'No autenticado' });
     }
 
-    // Normalizar roles a mayúsculas para comparación
-    const userRoleUpper = req.user.role.toUpperCase();
-    const rolesUpper = roles.map(r => r.toUpperCase());
+    // Normalizar roles para comparación (eliminar tildes, espacios, convertir a mayúsculas)
+    const userRoleNormalized = normalizeRole(req.user.role);
+    const rolesNormalized = roles.map(r => normalizeRole(r));
 
-    if (!rolesUpper.includes(userRoleUpper)) {
+    if (!rolesNormalized.includes(userRoleNormalized)) {
+      console.log(`❌ Acceso denegado: Rol del usuario "${req.user.role}" (normalizado: "${userRoleNormalized}") no está en [${roles.join(', ')}] (normalizados: [${rolesNormalized.join(', ')}])`);
       return res.status(403).json({ message: 'Acceso denegado' });
     }
 

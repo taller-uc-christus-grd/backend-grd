@@ -41,16 +41,26 @@ export async function signup(req: Request, res: Response) {
       }
     });
 
-    const token = signToken({ id: usuario.id.toString(), role: usuario.rol });
-    // Convertir el rol a minúsculas y usar 'role' en lugar de 'rol' para coincidir con el frontend
-    const roleLower = usuario.rol.toLowerCase();
+    // Normalizar el rol: eliminar tildes, espacios, convertir a minúsculas para el token
+    const normalizeRoleForToken = (rol: string): string => {
+      return rol
+        .toLowerCase()
+        .normalize('NFD') // Descompone caracteres con tildes (é -> e + ´)
+        .replace(/[\u0300-\u036f]/g, '') // Elimina los diacríticos (tildes)
+        .trim() // Elimina espacios al inicio y final
+        .replace(/\s+/g, ''); // Elimina espacios internos
+    };
+    
+    const roleNormalized = normalizeRoleForToken(usuario.rol);
+    const token = signToken({ id: usuario.id.toString(), role: roleNormalized });
+    
     return res.status(201).json({
       token,
       user: {
         id: usuario.id.toString(), // Asegurar que sea string
         nombre: usuario.nombre,
         email: usuario.email,
-        role: roleLower, // Cambiado de 'rol' a 'role' para coincidir con el frontend
+        role: roleNormalized, // Rol normalizado (sin tildes, sin espacios, minúsculas)
       }
     });
   } catch (error: any) {
@@ -106,16 +116,26 @@ export async function login(req: Request, res: Response) {
     // Log de login exitoso
     await logLogin(usuario.id, true, req.ip, usuario.email);
 
-    const token = signToken({ id: usuario.id.toString(), role: usuario.rol });
-    // Convertir el rol a minúsculas y usar 'role' en lugar de 'rol' para coincidir con el frontend
-    const roleLower = usuario.rol.toLowerCase();
+    // Normalizar el rol: eliminar tildes, espacios, convertir a minúsculas para el token
+    const normalizeRoleForToken = (rol: string): string => {
+      return rol
+        .toLowerCase()
+        .normalize('NFD') // Descompone caracteres con tildes (é -> e + ´)
+        .replace(/[\u0300-\u036f]/g, '') // Elimina los diacríticos (tildes)
+        .trim() // Elimina espacios al inicio y final
+        .replace(/\s+/g, ''); // Elimina espacios internos
+    };
+    
+    const roleNormalized = normalizeRoleForToken(usuario.rol);
+    const token = signToken({ id: usuario.id.toString(), role: roleNormalized });
+    
     return res.json({
       token,
       user: {
         id: usuario.id.toString(), // Asegurar que sea string
         nombre: usuario.nombre,
         email: usuario.email,
-        role: roleLower, // Cambiado de 'rol' a 'role' para coincidir con el frontend
+        role: roleNormalized, // Rol normalizado (sin tildes, sin espacios, minúsculas)
       }
     });
   } catch (error: any) {
