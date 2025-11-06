@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import { prisma } from '../db/client';
+import { logAdminAction } from '../utils/logger';
 
 export async function listUsers(_req: Request, res: Response) {
   try {
@@ -16,6 +17,11 @@ export async function listUsers(_req: Request, res: Response) {
       }
     });
     const usersLowercase = users.map(u => ({ ...u, rol: u.rol.toLowerCase() }));
+    
+    // Log de acción administrativa
+    const userId = parseInt(req.user!.id);
+    await logAdminAction(userId, 'Listado de usuarios consultado', `Total de usuarios: ${users.length}`);
+    
     return res.json(usersLowercase);
   } catch (error: any) {
     console.error('Error listando usuarios:', error);
@@ -61,6 +67,14 @@ export async function createUser(req: Request, res: Response) {
       }
     });
 
+    // Log de acción administrativa
+    const userId = parseInt(req.user!.id);
+    await logAdminAction(userId, 'Usuario creado', `Nuevo usuario: ${email} con rol ${rol || 'CODIFICADOR'}`, {
+      createdUserId: usuario.id,
+      createdUserEmail: email,
+      role: rol || 'CODIFICADOR'
+    });
+
     return res.status(201).json({ ...usuario, rol: usuario.rol.toLowerCase() });
   } catch (error: any) {
     console.error('Error creando usuario:', error);
@@ -99,6 +113,13 @@ export async function updateUser(req: Request, res: Response) {
       }
     });
 
+    // Log de acción administrativa
+    const userId = parseInt(req.user!.id);
+    await logAdminAction(userId, 'Usuario actualizado', `Usuario ID ${id} actualizado`, {
+      updatedUserId: parseInt(id),
+      changes: Object.keys(data)
+    });
+
     return res.json({ ...usuario, rol: usuario.rol.toLowerCase() });;
   } catch (error: any) {
     if (error.code === 'P2025') {
@@ -112,7 +133,16 @@ export async function updateUser(req: Request, res: Response) {
 export async function deleteUser(req: Request, res: Response) {
   try {
   const { id } = req.params;
+    const deletedUser = await prisma.usuario.findUnique({ where: { id: parseInt(id) } });
     await prisma.usuario.delete({ where: { id: parseInt(id) } });
+    
+    // Log de acción administrativa
+    const userId = parseInt(req.user!.id);
+    await logAdminAction(userId, 'Usuario eliminado', `Usuario ID ${id} eliminado`, {
+      deletedUserId: parseInt(id),
+      deletedUserEmail: deletedUser?.email
+    });
+    
     return res.status(204).send();
   } catch (error: any) {
     if (error.code === 'P2025') {
@@ -145,6 +175,13 @@ export async function toggleUserStatus(req: Request, res: Response) {
         activo: true,
         updatedAt: true
       }
+    });
+
+    // Log de acción administrativa
+    const userId = parseInt(req.user!.id);
+    await logAdminAction(userId, 'Estado de usuario cambiado', `Usuario ID ${id} ${activo ? 'activado' : 'desactivado'}`, {
+      updatedUserId: parseInt(id),
+      newStatus: activo
     });
 
     return res.json({ ...usuario, rol: usuario.rol.toLowerCase() });

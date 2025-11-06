@@ -7,6 +7,7 @@ import * as XLSX from 'xlsx';
 import { prisma } from '../db/client';
 import type { Prisma } from '@prisma/client';
 import { requireAuth } from '../middlewares/auth'; // Proteger la ruta
+import { logFileUpload } from '../utils/logger';
 
 const router = Router();
 
@@ -294,12 +295,13 @@ router.post('/upload', requireAuth, upload.single('file'), async (req: Request, 
     }
     
     // 4. Generar respuesta
+    const validRowsCount = validRecords.length - errorRecords.filter(e => e.fila === 'Procesamiento').length;
     const response = {
       success: true,
       message: 'Archivo procesado. Ver resumen.',
       summary: {
         total_rows: data.length,
-        valid_rows: validRecords.length - errorRecords.filter(e => e.fila === 'Procesamiento').length,
+        valid_rows: validRowsCount,
         invalid_rows: errorRecords.length,
         file_name: req.file.originalname,
         file_size: req.file.size,
@@ -309,6 +311,16 @@ router.post('/upload', requireAuth, upload.single('file'), async (req: Request, 
       errors: errorRecords.slice(0, 50) 
     };
 
+    // Log de carga de archivo
+    const userId = parseInt(req.user!.id);
+    await logFileUpload(
+      userId,
+      req.file.originalname,
+      req.file.size,
+      true,
+      errorRecords.length > 0 ? `${errorRecords.length} filas con errores` : undefined
+    );
+
     if (filePath && fs.existsSync(filePath)) {
       fs.unlinkSync(filePath); // Limpiar archivo temporal
     }
@@ -317,6 +329,19 @@ router.post('/upload', requireAuth, upload.single('file'), async (req: Request, 
 
   } catch (error: any) {
     console.error('Error general procesando archivo:', error);
+    
+    // Log de error al cargar archivo
+    if (req.user && req.file) {
+      const userId = parseInt(req.user.id);
+      await logFileUpload(
+        userId,
+        req.file.originalname,
+        req.file.size,
+        false,
+        error?.message || 'Error procesando archivo'
+      );
+    }
+    
     if (filePath && fs.existsSync(filePath)) {
       try { fs.unlinkSync(filePath); } catch (_) {}
     }

@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { prisma } from '../db/client';
+import { logAdminAction } from '../utils/logger';
 
 // Obtener todas las configuraciones del sistema
 export async function getConfig(req: Request, res: Response) {
@@ -158,6 +159,12 @@ export async function updateConfig(req: Request, res: Response) {
     }
     
     await Promise.all(updates);
+    
+    // Log de acción administrativa
+    const userId = parseInt(req.user!.id);
+    await logAdminAction(userId, 'Configuración del sistema actualizada', 'Configuración modificada', {
+      changes: Object.keys(configuracion)
+    });
     
     // Obtener la configuración actualizada
     const configs = await prisma.configuracionSistema.findMany();

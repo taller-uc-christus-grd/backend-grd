@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import { signToken } from '../utils/jwt';
 import { prisma } from '../db/client';
+import { logLogin } from '../utils/logger';
 
 // Las constantes 'ROLES' y 'Rol' se eliminaron ya que no se usaban.
 
@@ -82,18 +83,28 @@ export async function login(req: Request, res: Response) {
     });
 
     if (!usuario) {
+      // Log de intento de login con email inexistente
+      // No tenemos userId, así que creamos un log sin userId
+      await logLogin(null, false, req.ip, email);
       return res.status(401).json({ message: 'Credenciales inválidas' });
     }
 
     // Verificar si el usuario está inactivo
     if (!usuario.activo) {
+      // Log de intento de login con usuario inactivo
+      await logLogin(usuario.id, false, req.ip, email);
       return res.status(403).json({ message: 'Usuario inactivo. Contacta al administrador.' });
     }
 
     const passwordValido = await bcrypt.compare(password, usuario.passwordHash);
     if (!passwordValido) {
+      // Log de intento fallido
+      await logLogin(usuario.id, false, req.ip, email);
       return res.status(401).json({ message: 'Credenciales inválidas' });
     }
+
+    // Log de login exitoso
+    await logLogin(usuario.id, true, req.ip, usuario.email);
 
     const token = signToken({ id: usuario.id.toString(), role: usuario.rol });
     // Convertir el rol a minúsculas y usar 'role' en lugar de 'rol' para coincidir con el frontend
