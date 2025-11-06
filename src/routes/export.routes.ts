@@ -197,14 +197,25 @@ router.get('/export', requireAuth, async (req: Request, res: Response) => {
 
     // Generar Buffer
     const buf = XLSX.write(wb, { bookType: 'xlsx', type: 'buffer' });
-
-    // (Tu lógica de Cloudinary está bien, se queda igual)
-    if ((req.query as any).upload === 'true' && typeof uploadToCloudinary === 'function') {
-      // ...
-    }
-
-    // Enviar archivo como descarga
+    // Enviar archivo como descarga y cloudinary
     const fileName = `grd_export_${new Date().toISOString().slice(0, 10)}.xlsx`;
+
+    if(typeof uploadToCloudinary === 'function') {
+      console.log('☁️ Subiendo archivo a Cloudinary...');
+      uploadToCloudinary(buf, {
+        folder: 'grd_exports',
+        public_id: fileName,
+        resource_type: 'raw'
+      })
+      .then((result) => {
+        console.log('✅ Archivo subido a Cloudinary:', {result.secure_url});
+      })
+      .catch((err) => {
+        console.error('❌ Error subiendo archivo a Cloudinary:', err);
+      });
+      } else {
+        console.warn('⚠️ uploadToCloudinary no está definido o no es una función.');
+      }
     
     // (Tu lógica de log de descarga está bien, se queda igual)
     const userId = parseInt(req.user!.id);
