@@ -206,6 +206,8 @@ function normalizeEpisodeResponse(episode: any): any {
     centro: episode.centro || null,
     numeroFolio: episode.numeroFolio || null,
     tipoEpisodio: episode.tipoEpisodio || null,
+    tipoAlta: episode.tipoAlta || null,
+    convenio: episode.convenio || null,
     id: episode.id,
   };
 }
@@ -249,6 +251,7 @@ const episodioSchema = Joi.object({
   especialidad: Joi.string().optional().allow(null),
   anio: Joi.number().integer().optional().allow(null),
   mes: Joi.number().integer().optional().allow(null),
+  convenio: Joi.string().optional().allow(null),
   pacienteId: Joi.number().integer().optional().allow(null),
   grdId: Joi.number().integer().optional().allow(null),
 });
@@ -345,6 +348,7 @@ router.get('/episodios/final', requireAuth, async (req: Request, res: Response) 
         fechaIngreso: normalized.fechaIngreso || '',
         fechaAlta: normalized.fechaAlta || '',
         servicioAlta: normalized.servicioAlta || '',
+        convenio: normalized.convenio || null, // Convenio bajo el cual se calcula el episodio
         grdCodigo: normalized.grdCodigo,
         peso: normalized.peso || 0, // Para compatibilidad con el formato anterior
         montoRN: normalized.montoRN || 0, // Para compatibilidad con el formato anterior
@@ -353,13 +357,19 @@ router.get('/episodios/final', requireAuth, async (req: Request, res: Response) 
         validado: normalized.validado,
         estadoRN: normalized.estadoRN,
         at: normalized.at,
+        atDetalle: normalized.atDetalle,
         montoAT: normalized.montoAT,
+        motivoEgreso: normalized.tipoAlta || null, // Mapeo de tipoAlta a motivoEgreso para el frontend
         diasDemoraRescate: normalized.diasDemoraRescate,
         pagoDemora: normalized.pagoDemora,
         pagoOutlierSup: normalized.pagoOutlierSup,
         precioBaseTramo: normalized.precioBaseTramo,
         valorGRD: normalized.valorGRD,
         montoFinal: normalized.montoFinal,
+        documentacion: normalized.documentacion,
+        grupoDentroNorma: normalized.grupoDentroNorma,
+        diasEstada: normalized.diasEstada,
+        id: normalized.id,
       };
     });
 
@@ -1214,6 +1224,12 @@ async function processRow(row: RawRow) {
   });
 
   // 3. Crea el Episodio, ahora SÍ podemos vincular el grdId
+  // Buscar columna "Convenio" (puede tener diferentes nombres)
+  const convenioValue = cleanString(row['Convenio']) || 
+                        cleanString(row['Convenio (Descripción)']) || 
+                        cleanString(row['CONVENIO']) ||
+                        null;
+
   return await prisma.episodio.create({
     data: {
       centro: cleanString(row['Hospital (Descripción)']),
@@ -1233,6 +1249,7 @@ async function processRow(row: RawRow) {
       diasEstada: isNumeric(row['Estancia real del episodio'])
         ? parseInt(String(row['Estancia real del episodio']), 10)
         : null,
+      convenio: convenioValue, // Convenio bajo el cual se calcula el episodio
 
       // Vinculamos las entidades
       pacienteId: paciente.id,

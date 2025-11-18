@@ -197,6 +197,12 @@ async function processRow(row: RawRow) {
   // ¡MODIFICADO! Aquí guardamos los datos *crudos* del CSV.
   // El cálculo se hará en la exportación.
   // ¡CORREGIDO! Se elimina 'new Prisma.Decimal()'
+  // Buscar columna "Convenio" (puede tener diferentes nombres)
+  const convenioValue = cleanString(row['Convenio']) || 
+                        cleanString(row['Convenio (Descripción)']) || 
+                        cleanString(row['CONVENIO']) ||
+                        null;
+
   await prisma.episodio.create({
     data: {
       centro: cleanString(row['Hospital (Descripción)']),
@@ -217,6 +223,7 @@ async function processRow(row: RawRow) {
         : 0,
         
       inlierOutlier: cleanString(row['IR Alta Inlier / Outlier']),
+      convenio: convenioValue, // Convenio bajo el cual se calcula el episodio
       
       // Vinculamos las entidades
       pacienteId: paciente.id,
