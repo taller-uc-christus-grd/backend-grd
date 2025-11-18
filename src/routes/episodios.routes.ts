@@ -174,6 +174,7 @@ function normalizeEpisodeResponse(episode: any): any {
     episodio: episode.episodioCmdb || '',
     rut: episode.paciente?.rut || '',
     nombre: episode.paciente?.nombre || '',
+    convenio: episode.convenio || null,
     fechaIngreso: episode.fechaIngreso ? episode.fechaIngreso.toISOString().split('T')[0] : null,
     fechaAlta: episode.fechaAlta ? episode.fechaAlta.toISOString().split('T')[0] : null,
     servicioAlta: episode.servicioAlta || '',
@@ -249,6 +250,7 @@ const episodioSchema = Joi.object({
   especialidad: Joi.string().optional().allow(null),
   anio: Joi.number().integer().optional().allow(null),
   mes: Joi.number().integer().optional().allow(null),
+  convenio: Joi.string().optional().allow(null),
   pacienteId: Joi.number().integer().optional().allow(null),
   grdId: Joi.number().integer().optional().allow(null),
 });
@@ -339,6 +341,7 @@ router.get('/episodios/final', requireAuth, async (req: Request, res: Response) 
         episodio: normalized.episodio,
         nombre: normalized.nombre,
         rut: normalized.rut,
+        convenio: normalized.convenio || null,
         centro: normalized.centro || '',
         folio: normalized.numeroFolio || '',
         tipoEpisodio: normalized.tipoEpisodio || '',

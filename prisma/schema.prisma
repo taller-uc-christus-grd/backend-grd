@@ -81,6 +81,7 @@ model Episodio {
   especialidad        String?
   anio                Int?
   mes                 Int?
+  convenio            String?
 
   pacienteId Int?
   paciente   Paciente? @relation(fields: [pacienteId], references: [id])
