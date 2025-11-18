@@ -71,10 +71,12 @@ export async function signup(req: Request, res: Response) {
 
 export async function login(req: Request, res: Response) {
   try {
+    console.log('🔐 Iniciando proceso de login...');
     const { email, password } = req.body as {
       email: string;
       password: string;
     };
+    console.log(`📧 Email recibido: ${email}`);
 
     if (!email || !password) {
       return res.status(400).json({ message: 'email y password son obligatorios' });
@@ -111,6 +113,36 @@ export async function login(req: Request, res: Response) {
       // Log de intento fallido
       await logLogin(usuario.id, false, req.ip, email);
       return res.status(401).json({ message: 'Credenciales inválidas' });
+    }
+
+    // Actualizar fecha de último acceso (solo en login exitoso)
+    // Envolvemos en try-catch para que no rompa el login si falla
+    try {
+      const now = new Date();
+      console.log(`🔄 Intentando actualizar lastAccessAt para usuario ${usuario.id} (${usuario.email}) a las ${now.toISOString()}`);
+      
+      const updated = await prisma.usuario.update({
+        where: { id: usuario.id },
+        data: { lastAccessAt: now },
+        select: { id: true, lastAccessAt: true }
+      });
+      
+      console.log(`✅ lastAccessAt actualizado exitosamente para usuario ${usuario.id} (${usuario.email})`);
+      console.log(`   Valor actualizado: ${updated.lastAccessAt?.toISOString()}`);
+    } catch (updateError: any) {
+      // Log del error pero no rompemos el flujo del login
+      console.error('⚠️ Error al actualizar lastAccessAt:', {
+        userId: usuario.id,
+        email: usuario.email,
+        error: updateError?.message,
+        code: updateError?.code,
+        meta: updateError?.meta,
+        stack: updateError?.stack
+      });
+      // Si el error es porque la columna no existe, es un problema de migración
+      if (updateError?.code === 'P2025' || updateError?.message?.includes('Unknown column') || updateError?.code === 'P2002') {
+        console.error('❌ CRÍTICO: La columna lastAccessAt no existe o hay un problema de migración. Ejecuta la migración en producción.');
+      }
     }
 
     // Log de login exitoso

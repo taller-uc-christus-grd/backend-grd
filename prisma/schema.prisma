@@ -12,14 +12,15 @@ datasource db {
 //
 
 model Usuario {
-  id           Int      @id @default(autoincrement())
+  id           Int       @id @default(autoincrement())
   nombre       String
-  email        String   @unique
+  email        String    @unique
   passwordHash String
-  rol          String   @db.VarChar(50)
-  activo       Boolean  @default(true)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  rol          String    @db.VarChar(50)
+  activo       Boolean   @default(true)
+  lastAccessAt DateTime? // Fecha y hora del último acceso (login exitoso)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
 
   // Relaciones
   respaldos Respaldo[]   @relation("UsuarioRespaldo")
