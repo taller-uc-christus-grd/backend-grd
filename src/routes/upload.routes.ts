@@ -98,6 +98,94 @@ function cleanString(value?: any): string | null {
   return out === '' ? null : out;
 }
 
+// Helper para buscar columna "Convenio" de manera flexible
+// Prioriza "Convenios (cod)" sobre "Convenios (des)" cuando hay múltiples columnas
+function findConvenioValue(row: RawRow): string | null {
+  // PRIMERA PRIORIDAD: Buscar específicamente columnas con "(cod)" que tengan valor
+  // Esto asegura que encontremos "Convenios (cod)" antes que "Convenios (des)"
+  const todasLasKeys = Object.keys(row);
+  
+  // Buscar primero columnas que contengan "(cod)" y tengan valor
+  for (const key of todasLasKeys) {
+    if (key) {
+      const normalized = key.toLowerCase().trim().replace(/\s+/g, ' ');
+      // Priorizar columnas que contengan "(cod)"
+      if (normalized.includes('convenio') && (normalized.includes('(cod)') || normalized.includes(' cod'))) {
+        const value = cleanString(row[key]);
+        if (value) {
+          console.log(`✅ Encontrado Convenio (prioridad cod) en columna "${key}": "${value}"`);
+          return value;
+        }
+      }
+    }
+  }
+  
+  // SEGUNDA PRIORIDAD: Buscar por nombres exactos que contengan "(cod)"
+  const nombresExactosConCod = [
+    'Convenios (cod)',
+    'Convenios  (cod)', // Con dos espacios
+    'Convenios(cod)',
+    'CONVENIOS (COD)',
+    'convenios (cod)',
+    'Convenio (cod)',
+    'Convenio(cod)',
+  ];
+  
+  for (const nombreExacto of nombresExactosConCod) {
+    if (nombreExacto in row) {
+      const value = cleanString(row[nombreExacto]);
+      if (value) {
+        console.log(`✅ Encontrado Convenio (exacto con cod) en columna "${nombreExacto}": "${value}"`);
+        return value;
+      }
+    }
+  }
+  
+  // TERCERA PRIORIDAD: Buscar otras variaciones de convenio (sin "(cod)" específico)
+  for (const key of todasLasKeys) {
+    if (key) {
+      const normalized = key.toLowerCase().trim().replace(/\s+/g, ' ');
+      if (normalized.includes('convenio') && !normalized.includes('(des)') && !normalized.includes(' des')) {
+        const value = cleanString(row[key]);
+        if (value) {
+          console.log(`✅ Encontrado Convenio (flexible) en columna "${key}": "${value}"`);
+          return value;
+        }
+      }
+    }
+  }
+  
+  // CUARTA PRIORIDAD: Buscar nombres exactos sin "(cod)"
+  const nombresExactosSinCod = [
+    'Convenio',
+    'Convenios',
+    'CONVENIO',
+    'CONVENIOS'
+  ];
+  
+  for (const nombreExacto of nombresExactosSinCod) {
+    if (nombreExacto in row) {
+      const value = cleanString(row[nombreExacto]);
+      if (value) {
+        console.log(`✅ Encontrado Convenio (exacto sin cod) en columna "${nombreExacto}": "${value}"`);
+        return value;
+      }
+    }
+  }
+  
+  // Log solo si realmente no se encontró nada
+  if (todasLasKeys.length > 0) {
+    const columnasConvenio = todasLasKeys.filter(k => k.toLowerCase().includes('convenio'));
+    if (columnasConvenio.length > 0) {
+      console.log(`⚠️ No se encontró columna Convenio con valor. Columnas relacionadas encontradas: ${columnasConvenio.join(', ')}`);
+      columnasConvenio.forEach(col => {
+        console.log(`   "${col}" = "${row[col]}" (vacío: ${!cleanString(row[col])})`);
+      });
+    }
+  }
+  return null;
+}
+
 /**
  * Valida una fila ANTES de procesarla.
  * ¡MODIFICADO con la validación de GRD!
@@ -197,11 +285,10 @@ async function processRow(row: RawRow) {
   // ¡MODIFICADO! Aquí guardamos los datos *crudos* del CSV.
   // El cálculo se hará en la exportación.
   // ¡CORREGIDO! Se elimina 'new Prisma.Decimal()'
-  // Buscar columna "Convenio" (puede tener diferentes nombres)
-  const convenioValue = cleanString(row['Convenio']) || 
-                        cleanString(row['Convenio (Descripción)']) || 
-                        cleanString(row['CONVENIO']) ||
-                        null;
+  // Buscar columna "Convenio" de manera flexible
+  console.log(`🔍 [UPLOAD] Buscando Convenio para episodio ${cleanString(row['Episodio CMBD'])}`);
+  const convenioValue = findConvenioValue(row);
+  console.log(`💾 [UPLOAD] Convenio encontrado: "${convenioValue || 'null/vacío'}"`);
 
   await prisma.episodio.create({
     data: {
@@ -223,13 +310,17 @@ async function processRow(row: RawRow) {
         : 0,
         
       inlierOutlier: cleanString(row['IR Alta Inlier / Outlier']),
-      convenio: convenioValue, // Convenio bajo el cual se calcula el episodio
+      // Convenio es un campo requerido - siempre debe estar presente
+      // Si no hay valor en el Excel, usamos cadena vacía en lugar de null
+      convenio: convenioValue ? cleanString(convenioValue) : '',
       
       // Vinculamos las entidades
       pacienteId: paciente.id,
       grdId: grdRule.id, // <-- Vinculado, no creado
     },
   });
+  
+  console.log(`✅ [UPLOAD] Episodio creado: ${cleanString(row['Episodio CMBD'])}, convenio: "${convenioValue ? cleanString(convenioValue) : ''}"`);
 }
 
 // --- Endpoint de Carga (AHORA GUARDA EN DB) ---

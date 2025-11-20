@@ -7,6 +7,7 @@ import csv from 'csv-parser';
 import * as XLSX from 'xlsx';
 import { requireAuth, requireRole } from '../middlewares/auth';
 import { prisma } from '../db/client'; // ¡Importante! Conecta con la DB
+import { Prisma } from '@prisma/client';
 import { Readable } from 'stream';
 import { uploadToCloudinary } from '../config/cloudinary';
 import cloudinary from '../config/cloudinary';
@@ -205,9 +206,9 @@ function normalizeEpisodeResponse(episode: any): any {
     // Otros campos del episodio
     centro: episode.centro || null,
     numeroFolio: episode.numeroFolio || null,
-    tipoEpisodio: episode.tipoEpisodio || null,
+    tipoEpisodio: episode.tipoEpisodio || '',
     tipoAlta: episode.tipoAlta || null,
-    convenio: episode.convenio || null,
+    convenio: episode.convenio || '', // Misma lógica que tipoEpisodio
     id: episode.id,
   };
 }
@@ -333,10 +334,25 @@ router.get('/episodios/final', requireAuth, async (req: Request, res: Response) 
       return 0;
     };
 
+    // Log para debug: verificar convenio en los primeros episodios
+    if (episodes.length > 0) {
+      const primeros3 = episodes.slice(0, 3);
+      primeros3.forEach((e: any) => {
+        console.log(`📋 Episodio ${e.episodioCmdb}: convenio en BD = "${e.convenio || 'null/undefined'}"`);
+        console.log(`   Tipo: ${typeof e.convenio}, Tiene campo: ${'convenio' in e}`);
+      });
+    }
+    
     // Transformar al formato esperado por el frontend usando normalización
     // Usar la función normalizeEpisodeResponse para cada episodio
     const items = episodes.map((e: any) => {
       const normalized = normalizeEpisodeResponse(e);
+      
+      // Log para verificar que convenio se normaliza correctamente
+      if (episodes.indexOf(e) < 3) {
+        console.log(`🔄 Normalizado episodio ${normalized.episodio}: convenio = "${normalized.convenio || 'null/undefined'}"`);
+      }
+      
       // El endpoint /final tiene un formato ligeramente diferente, ajustar campos
       return {
         episodio: normalized.episodio,
@@ -348,7 +364,7 @@ router.get('/episodios/final', requireAuth, async (req: Request, res: Response) 
         fechaIngreso: normalized.fechaIngreso || '',
         fechaAlta: normalized.fechaAlta || '',
         servicioAlta: normalized.servicioAlta || '',
-        convenio: normalized.convenio || null, // Convenio bajo el cual se calcula el episodio
+        convenio: normalized.convenio || '', // Convenio bajo el cual se calcula el episodio - misma lógica que tipoEpisodio
         grdCodigo: normalized.grdCodigo,
         peso: normalized.peso || 0, // Para compatibilidad con el formato anterior
         montoRN: normalized.montoRN || 0, // Para compatibilidad con el formato anterior
@@ -372,6 +388,17 @@ router.get('/episodios/final', requireAuth, async (req: Request, res: Response) 
         id: normalized.id,
       };
     });
+
+    // Log para verificar la respuesta final que se envía al frontend
+    if (items.length > 0) {
+      const primerItem = items[0];
+      console.log(`📤 Respuesta /episodios/final - Primer item:`, {
+        episodio: primerItem.episodio,
+        convenio: primerItem.convenio,
+        tieneConvenio: 'convenio' in primerItem,
+        todasLasKeys: Object.keys(primerItem).slice(0, 15)
+      });
+    }
 
     return res.json({
       items,
@@ -1132,6 +1159,148 @@ function cleanString(value?: any): string | null {
   return out === '' ? null : out;
 }
 
+// Helper para buscar columna "Convenio" de manera flexible
+// Prioriza "Convenios (cod)" sobre "Convenios (des)" cuando hay múltiples columnas
+function findConvenioValue(row: RawRow): string | null {
+  // PRIMERA PRIORIDAD: Buscar específicamente columnas con "(cod)" que tengan valor
+  // Esto asegura que encontremos "Convenios (cod)" antes que "Convenios (des)"
+  const todasLasKeys = Object.keys(row);
+  
+  // Log para debug: mostrar todas las columnas relacionadas con convenio
+  const columnasConvenio = todasLasKeys.filter(k => {
+    const normalized = k.toLowerCase().trim();
+    return normalized.includes('convenio');
+  });
+  
+  if (columnasConvenio.length > 0) {
+    console.log(`🔍 Columnas relacionadas con Convenio encontradas:`, columnasConvenio);
+    columnasConvenio.forEach(k => {
+      const valor = row[k];
+      console.log(`   "${k}" = "${valor}" (tipo: ${typeof valor}, limpio: "${cleanString(valor)}")`);
+    });
+  }
+  
+  // Buscar primero columnas que contengan "(cod)" y tengan valor
+  // Normalizar espacios múltiples y comparar de manera flexible
+  for (const key of todasLasKeys) {
+    if (key) {
+      // Normalizar: convertir a minúsculas, quitar espacios al inicio/fin, y normalizar espacios múltiples
+      const normalized = key.toLowerCase().trim().replace(/\s+/g, ' ');
+      // Priorizar columnas que contengan "(cod)" o " cod" (con o sin paréntesis)
+      if (normalized.includes('convenio') && (normalized.includes('(cod)') || normalized.includes(' cod'))) {
+        const rawValue = row[key];
+        if (rawValue !== undefined && rawValue !== null) {
+          const value = cleanString(rawValue);
+          if (value) {
+            console.log(`✅ Encontrado Convenio (prioridad cod) en columna "${key}": "${value}"`);
+            return value;
+          } else if (rawValue === '' || (typeof rawValue === 'string' && rawValue.trim() === '')) {
+            // Si el valor es cadena vacía explícita, retornar cadena vacía (no null)
+            console.log(`✅ Encontrado Convenio (prioridad cod, vacío) en columna "${key}": ""`);
+            return '';
+          } else {
+            console.log(`⚠️ Columna "${key}" encontrada pero sin valor (valor raw: "${row[key]}")`);
+          }
+        }
+      }
+    }
+  }
+  
+  // SEGUNDA PRIORIDAD: Buscar por nombres exactos que contengan "(cod)"
+  // Incluir variaciones con diferentes números de espacios
+  const nombresExactosConCod = [
+    'Convenios (cod)',
+    'Convenios  (cod)', // Con dos espacios
+    'Convenios   (cod)', // Con tres espacios
+    'Convenios(cod)',
+    'CONVENIOS (COD)',
+    'convenios (cod)',
+    'Convenio (cod)',
+    'Convenio(cod)',
+  ];
+  
+  for (const nombreExacto of nombresExactosConCod) {
+    if (nombreExacto in row) {
+      const value = cleanString(row[nombreExacto]);
+      if (value) {
+        console.log(`✅ Encontrado Convenio (exacto con cod) en columna "${nombreExacto}": "${value}"`);
+        return value;
+      }
+    }
+  }
+  
+  // Buscar también con normalización de espacios (por si hay más de 3 espacios)
+  for (const key of todasLasKeys) {
+    if (key) {
+      const normalized = key.toLowerCase().trim().replace(/\s+/g, ' ');
+      // Buscar coincidencia exacta después de normalizar
+      if (normalized === 'convenios (cod)' || normalized === 'convenio (cod)') {
+        const value = cleanString(row[key]);
+        if (value) {
+          console.log(`✅ Encontrado Convenio (normalizado) en columna "${key}": "${value}"`);
+          return value;
+        }
+      }
+    }
+  }
+  
+  // TERCERA PRIORIDAD: Buscar otras variaciones de convenio (sin "(cod)" específico)
+  // Incluir búsqueda case-insensitive y con diferentes espacios
+  for (const key of todasLasKeys) {
+    if (key) {
+      const normalized = key.toLowerCase().trim().replace(/\s+/g, ' ');
+      if (normalized.includes('convenio') && !normalized.includes('(des)') && !normalized.includes(' des')) {
+        // Aceptar valores incluso si están vacíos (pero no null/undefined)
+        const rawValue = row[key];
+        if (rawValue !== undefined && rawValue !== null) {
+          const value = cleanString(rawValue);
+          // Si hay valor, retornarlo; si está vacío pero la columna existe, retornar cadena vacía
+          if (value) {
+            console.log(`✅ Encontrado Convenio (flexible) en columna "${key}": "${value}"`);
+            return value;
+          } else if (rawValue === '' || (typeof rawValue === 'string' && rawValue.trim() === '')) {
+            // Si el valor es cadena vacía explícita, retornar cadena vacía (no null)
+            console.log(`✅ Encontrado Convenio (flexible, vacío) en columna "${key}": ""`);
+            return '';
+          }
+        }
+      }
+    }
+  }
+  
+  // CUARTA PRIORIDAD: Buscar nombres exactos sin "(cod)"
+  const nombresExactosSinCod = [
+    'Convenio',
+    'Convenios',
+    'CONVENIO',
+    'CONVENIOS'
+  ];
+  
+  for (const nombreExacto of nombresExactosSinCod) {
+    if (nombreExacto in row) {
+      const value = cleanString(row[nombreExacto]);
+      if (value) {
+        console.log(`✅ Encontrado Convenio (exacto sin cod) en columna "${nombreExacto}": "${value}"`);
+        return value;
+      }
+    }
+  }
+  
+  // Log solo si realmente no se encontró nada
+  if (todasLasKeys.length > 0) {
+    const columnasConvenio = todasLasKeys.filter(k => k.toLowerCase().includes('convenio'));
+    if (columnasConvenio.length > 0) {
+      console.log(`⚠️ No se encontró columna Convenio con valor. Columnas relacionadas encontradas: ${columnasConvenio.join(', ')}`);
+      columnasConvenio.forEach(col => {
+        console.log(`   "${col}" = "${row[col]}" (vacío: ${!cleanString(row[col])})`);
+      });
+    } else {
+      console.log(`⚠️ No se encontró columna Convenio. Columnas disponibles: ${todasLasKeys.slice(0, 15).join(', ')}...`);
+    }
+  }
+  return null;
+}
+
 // ===================================================================
 // =================== ¡MODIFICACIÓN 1: validateRow! ===================
 // ===================================================================
@@ -1224,51 +1393,125 @@ async function processRow(row: RawRow) {
   });
 
   // 3. Crea el Episodio, ahora SÍ podemos vincular el grdId
-  // Buscar columna "Convenio" (puede tener diferentes nombres)
-  const convenioValue = cleanString(row['Convenio']) || 
-                        cleanString(row['Convenio (Descripción)']) || 
-                        cleanString(row['CONVENIO']) ||
-                        null;
+  // Buscar columna "Convenio" de manera flexible
+  // Log detallado ANTES de buscar para ver qué columnas tiene el row
+  const todasLasKeys = Object.keys(row);
+  const keysConvenio = todasLasKeys.filter(k => k.toLowerCase().includes('convenio'));
+  if (keysConvenio.length > 0) {
+    console.log(`🔍 Buscando Convenio para episodio ${cleanString(row['Episodio CMBD'])}:`);
+    keysConvenio.forEach(k => {
+      const valor = row[k];
+      console.log(`   Columna: "${k}" = "${valor}" (tipo: ${typeof valor}, vacío: ${!cleanString(valor)})`);
+    });
+  }
+  
+  const convenioValue = findConvenioValue(row);
+  if (convenioValue) {
+    console.log(`💾 ✅ Guardando Convenio para episodio ${cleanString(row['Episodio CMBD'])}: "${convenioValue}"`);
+  } else {
+    // Log detallado si no se encuentra
+    console.log(`⚠️ ❌ No se encontró Convenio para episodio ${cleanString(row['Episodio CMBD'])} - se guardará como cadena vacía`);
+    if (keysConvenio.length > 0) {
+      console.log(`   Columnas relacionadas encontradas pero sin valor:`, keysConvenio);
+      keysConvenio.forEach(k => {
+        console.log(`     "${k}" = "${row[k]}" (raw: ${JSON.stringify(row[k])})`);
+      });
+    } else {
+      console.log(`   No se encontraron columnas relacionadas con "convenio" en el row`);
+      console.log(`   Primeras 20 columnas del row:`, todasLasKeys.slice(0, 20));
+    }
+  }
 
-  return await prisma.episodio.create({
-    data: {
-      centro: cleanString(row['Hospital (Descripción)']),
-      numeroFolio: cleanString(row['ID Derivación']),
-      episodioCmdb: cleanString(row['Episodio CMBD']),
-      tipoEpisodio: cleanString(row['Tipo Actividad']),
-      fechaIngreso: new Date(row['Fecha Ingreso completa']),
-      fechaAlta: new Date(row['Fecha Completa']),
-      servicioAlta: cleanString(row['Servicio Egreso (Descripción)']),
-      montoRn: isNumeric(row['Facturación Total del episodio']) // Asegúrate que esta columna exista en tu excel
-        ? parseFloat(row['Facturación Total del episodio'])
-        : 0,
-      pesoGrd: isNumeric(row['Peso Medio [Norma IR]']) // Usamos la columna correcta
-        ? parseFloat(row['Peso Medio [Norma IR]'])
-        : 0,
-      inlierOutlier: cleanString(row['IR Alta Inlier / Outlier']),
-      diasEstada: isNumeric(row['Estancia real del episodio'])
-        ? parseInt(String(row['Estancia real del episodio']), 10)
-        : null,
-      convenio: convenioValue, // Convenio bajo el cual se calcula el episodio
+  // Preparar el valor de convenio - SIEMPRE debe ser string (nunca null)
+  // Si convenioValue es null, usar cadena vacía; si es cadena vacía, mantenerla; si tiene valor, limpiarlo
+  let convenioFinal = '';
+  if (convenioValue !== null && convenioValue !== undefined) {
+    if (typeof convenioValue === 'string' && convenioValue.trim() === '') {
+      convenioFinal = ''; // Mantener cadena vacía explícita
+    } else {
+      const cleaned = cleanString(convenioValue);
+      convenioFinal = cleaned || ''; // Si cleanString devuelve null, usar cadena vacía
+    }
+  }
+  console.log(`🔧 Convenio final preparado: "${convenioFinal}" (tipo: ${typeof convenioFinal}, original: "${convenioValue}")`);
 
-      // Vinculamos las entidades
-      pacienteId: paciente.id,
-      grdId: grdRule.id, // <-- ¡Esto ahora SIEMPRE funcionará!
-    },
+  // Construir el objeto de datos - convenio se trata igual que cualquier otro campo
+  const episodioData: any = {
+    centro: cleanString(row['Hospital (Descripción)']),
+    numeroFolio: cleanString(row['ID Derivación']),
+    episodioCmdb: cleanString(row['Episodio CMBD']),
+    tipoEpisodio: cleanString(row['Tipo Actividad']) || '',
+    fechaIngreso: new Date(row['Fecha Ingreso completa']),
+    fechaAlta: new Date(row['Fecha Completa']),
+    servicioAlta: cleanString(row['Servicio Egreso (Descripción)']) || '',
+    montoRn: isNumeric(row['Facturación Total del episodio'])
+      ? parseFloat(row['Facturación Total del episodio'])
+      : 0,
+    pesoGrd: isNumeric(row['Peso Medio [Norma IR]'])
+      ? parseFloat(row['Peso Medio [Norma IR]'])
+      : 0,
+    inlierOutlier: cleanString(row['IR Alta Inlier / Outlier']) || '',
+    diasEstada: isNumeric(row['Estancia real del episodio'])
+      ? parseInt(String(row['Estancia real del episodio']), 10)
+      : null,
+    // Convenio es un campo requerido - SIEMPRE debe ser string (nunca null)
+    // Misma lógica que tipoEpisodio: siempre string, cadena vacía si no hay valor
+    convenio: convenioFinal,
+    // Vinculamos las entidades
+    pacienteId: paciente.id,
+    grdId: grdRule.id,
+  };
+  
+  // Log detallado para debug
+  console.log(`💾 Datos del episodio antes de crear:`, {
+    episodioCmdb: episodioData.episodioCmdb,
+    convenio: episodioData.convenio,
+    convenioValue: convenioValue,
+    tipoConvenio: typeof episodioData.convenio,
+    tieneConvenio: 'convenio' in episodioData,
+    todasLasKeys: Object.keys(episodioData),
+    // Verificar que convenio esté presente y sea string
+    convenioEnData: episodioData.convenio,
+    convenioEsString: typeof episodioData.convenio === 'string',
+    convenioLength: episodioData.convenio?.length,
+  });
+
+  // Verificar explícitamente que convenio esté en el objeto antes de crear
+  if (!('convenio' in episodioData)) {
+    console.error(`❌ ERROR: convenio NO está en episodioData antes de crear!`);
+    episodioData.convenio = ''; // Forzar que esté presente
+  }
+  if (typeof episodioData.convenio !== 'string') {
+    console.error(`❌ ERROR: convenio no es string, es ${typeof episodioData.convenio}. Convirtiendo...`);
+    episodioData.convenio = String(episodioData.convenio || '');
+  }
+
+  const episodioCreado = await prisma.episodio.create({
+    data: episodioData,
     include: {
       paciente: true,
       grd: true,
     },
   });
+  
+  // Log detallado del episodio creado
+  console.log(`📦 Episodio creado - ID: ${episodioCreado.id}, Episodio: ${episodioCreado.episodioCmdb}`);
+  console.log(`   Convenio en objeto creado: "${episodioCreado.convenio || 'null/undefined'}"`);
+  
+  return episodioCreado;
 }
 
 // Endpoint de importación de episodios (formato esperado por el frontend)
 router.post('/episodios/import', requireAuth, upload.single('file'), async (req: Request, res: Response) => {
+  console.log('📥 ========== INICIO IMPORTACIÓN ==========');
+  console.log('📁 Archivo recibido:', req.file?.originalname, 'Tamaño:', req.file?.size, 'bytes');
+  
   const errorRecords: any[] = [];
   const validRecords: RawRow[] = [];
 
   try {
     if (!req.file) {
+      console.log('❌ No se proporcionó ningún archivo');
       return res.status(400).json({ error: 'No se proporcionó ningún archivo' });
     }
 
@@ -1304,6 +1547,49 @@ router.post('/episodios/import', requireAuth, upload.single('file'), async (req:
       const sheetName = workbook.SheetNames[0];
       const worksheet = workbook.Sheets[sheetName];
       data = XLSX.utils.sheet_to_json(worksheet) as RawRow[];
+      
+      // Log para debug: verificar columnas del archivo
+      if (data.length > 0) {
+        const firstRow = data[0];
+        const columnas = Object.keys(firstRow);
+        console.log('📊 Columnas encontradas en el archivo (primeras 20):', columnas.slice(0, 20));
+        
+        // Buscar todas las columnas relacionadas con convenio
+        const columnasConvenio = columnas.filter(c => {
+          const normalized = c.toLowerCase().trim();
+          return normalized.includes('convenio') || normalized.includes('convenios');
+        });
+        
+        if (columnasConvenio.length > 0) {
+          console.log(`✅ Columnas Convenio encontradas (${columnasConvenio.length}):`, columnasConvenio);
+          columnasConvenio.forEach(col => {
+            console.log(`   "${col}" = "${firstRow[col]}" (tipo: ${typeof firstRow[col]})`);
+          });
+          
+          // Verificar que findConvenioValue la encuentre
+          const testValue = findConvenioValue(firstRow);
+          console.log(`   Test findConvenioValue: "${testValue}"`);
+          
+          if (!testValue) {
+            console.log('⚠️ findConvenioValue NO encontró el valor, pero la columna existe!');
+            console.log('   Revisando manualmente...');
+            columnasConvenio.forEach(col => {
+              const value = cleanString(firstRow[col]);
+              if (value) {
+                console.log(`   💡 Valor encontrado manualmente en "${col}": "${value}"`);
+              }
+            });
+          }
+        } else {
+          console.log('⚠️ No se encontró columna Convenio en el archivo');
+          console.log('   Buscando manualmente en todas las columnas...');
+          columnas.forEach(col => {
+            if (col.toLowerCase().includes('conven') || col.toLowerCase().includes('cod')) {
+              console.log(`   Columna relacionada encontrada: "${col}" = "${firstRow[col]}"`);
+            }
+          });
+        }
+      }
     }
 
     // Validar y procesar filas
@@ -1345,6 +1631,19 @@ router.post('/episodios/import', requireAuth, upload.single('file'), async (req:
       return 0;
     };
 
+    // Log para verificar los episodios antes de mapear
+    if (createdEpisodes.length > 0) {
+      const primerEpisodio = createdEpisodes[0];
+      console.log(`🔍 Antes de mapear respuesta - Primer episodio:`, {
+        id: primerEpisodio.id,
+        episodioCmdb: primerEpisodio.episodioCmdb,
+        convenio: primerEpisodio.convenio,
+        tieneConvenio: 'convenio' in primerEpisodio,
+        tipoConvenio: typeof primerEpisodio.convenio,
+        todasLasKeys: Object.keys(primerEpisodio).slice(0, 15)
+      });
+    }
+
     // Formato de respuesta esperado por el frontend
     const response = {
       summary: {
@@ -1352,27 +1651,72 @@ router.post('/episodios/import', requireAuth, upload.single('file'), async (req:
         valid: createdEpisodes.length,
         errors: errorRecords.length,
       },
-      episodes: createdEpisodes.map((e) => ({
-        episodio: e.episodioCmdb || '',
-        nombre: e.paciente?.nombre || '',
-        rut: e.paciente?.rut || '',
-        centro: e.centro || '',
-        folio: e.numeroFolio || '',
-        tipoEpisodio: e.tipoEpisodio || '',
-        fechaIngreso: e.fechaIngreso ? e.fechaIngreso.toISOString().split('T')[0] : '',
-        // ===================================================================
-        // ======================= ¡AQUÍ ESTÁ LA CORRECCIÓN! =================
-        // ===================================================================
-        fechaAlta: e.fechaAlta ? e.fechaAlta.toISOString().split('T')[0] : '', // <-- ANTES DECÍA [MAIN]
-        servicioAlta: e.servicioAlta || '',
-        grdCodigo: e.grd?.codigo || '',
-        peso: toNumber(e.pesoGd),
-        montoRN: toNumber(e.montoRn),
-        inlierOutlier: e.inlierOutlier || '',
-      })),
+      episodes: createdEpisodes.map((e, idx) => {
+        // Asegurar que convenio siempre esté presente - misma lógica que tipoEpisodio
+        // Usar cadena vacía en lugar de null para consistencia
+        const convenioValue = (e.convenio !== undefined && e.convenio !== null && e.convenio !== '') 
+          ? String(e.convenio).trim() 
+          : '';
+        
+        // Log para los primeros 3 episodios
+        if (idx < 3) {
+          console.log(`🔄 Mapeando episodio ${idx + 1}:`, {
+            id: e.id,
+            episodioCmdb: e.episodioCmdb,
+            convenioEnObjeto: e.convenio,
+            tieneConvenio: 'convenio' in e,
+            tipoConvenio: typeof e.convenio,
+            convenioValue: convenioValue,
+            todasLasKeys: Object.keys(e).slice(0, 20)
+          });
+        }
+        
+        // Construir el objeto mapeado asegurando que convenio siempre esté presente
+        const mapped: any = {
+          episodio: e.episodioCmdb || '',
+          nombre: e.paciente?.nombre || '',
+          rut: e.paciente?.rut || '',
+          centro: e.centro || '',
+          folio: e.numeroFolio || '',
+          tipoEpisodio: e.tipoEpisodio || '',
+          fechaIngreso: e.fechaIngreso ? e.fechaIngreso.toISOString().split('T')[0] : '',
+          // ===================================================================
+          // ======================= ¡AQUÍ ESTÁ LA CORRECCIÓN! =================
+          // ===================================================================
+          fechaAlta: e.fechaAlta ? e.fechaAlta.toISOString().split('T')[0] : '', // <-- ANTES DECÍA [MAIN]
+          servicioAlta: e.servicioAlta || '',
+          grdCodigo: e.grd?.codigo || '',
+          peso: toNumber(e.pesoGd),
+          montoRN: toNumber(e.montoRn),
+          inlierOutlier: e.inlierOutlier || '',
+          id: e.id, // Incluir ID para poder editar después
+        };
+        
+        // Asegurar que convenio siempre esté presente - misma lógica que tipoEpisodio
+        mapped.convenio = convenioValue || ''; // Convenio bajo el cual se calcula el episodio - siempre incluido
+        
+        // Verificar que convenio esté en el objeto mapeado
+        if (idx === 0) {
+          console.log(`✅ Objeto mapeado - tiene convenio: ${'convenio' in mapped}, valor: "${mapped.convenio}"`);
+          console.log(`   Keys del objeto mapeado:`, Object.keys(mapped));
+        }
+        
+        return mapped;
+      }),
       // Opcional: enviar los primeros 50 errores al frontend
       errorDetails: errorRecords.slice(0, 50),
     };
+
+    // Log para verificar la respuesta final
+    if (response.episodes.length > 0) {
+      const primerEpisodioRespuesta = response.episodes[0];
+      console.log(`📤 Respuesta final - Primer episodio:`, {
+        episodio: primerEpisodioRespuesta.episodio,
+        convenio: primerEpisodioRespuesta.convenio,
+        tieneConvenio: 'convenio' in primerEpisodioRespuesta,
+        todasLasKeys: Object.keys(primerEpisodioRespuesta)
+      });
+    }
 
     return res.status(200).json(response);
   } catch (error: any) {
