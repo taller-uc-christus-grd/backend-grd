@@ -258,9 +258,34 @@ const episodioSchema = Joi.object({
 });
 
 // Listar episodios (AHORA DESDE PRISMA)
-router.get('/episodios', requireAuth, async (_req: Request, res: Response) => {
+router.get('/episodios', requireAuth, async (req: Request, res: Response) => {
   try {
+    const convenio = req.query.convenio as string | undefined;
+
+    // Construir filtro where
+    const where: Prisma.EpisodioWhereInput = {};
+    
+    // Filtro por convenio (solo para usuarios de finanzas)
+    // Normalizar rol del usuario para comparación
+    const userRole = req.user?.role || '';
+    const normalizedRole = userRole
+      .toUpperCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .trim()
+      .replace(/\s+/g, '');
+    const isFinanzas = normalizedRole === 'FINANZAS';
+    
+    // Solo aplicar filtro de convenio si el usuario es de finanzas
+    if (isFinanzas && convenio && convenio.trim() !== '') {
+      where.convenio = {
+        contains: convenio.trim(),
+        mode: 'insensitive', // Búsqueda case-insensitive
+      };
+    }
+
     const episodios = await prisma.episodio.findMany({
+      where,
       include: {
         paciente: { select: { id: true, nombre: true, rut: true } },
         grd: { select: { id: true, codigo: true, descripcion: true } },
@@ -309,9 +334,33 @@ router.get('/episodios/final', requireAuth, async (req: Request, res: Response) 
     const page = parseInt(req.query.page as string) || 1;
     const pageSize = parseInt(req.query.pageSize as string) || 10;
     const skip = (page - 1) * pageSize;
+    const convenio = req.query.convenio as string | undefined;
+
+    // Construir filtro where
+    const where: Prisma.EpisodioWhereInput = {};
+    
+    // Filtro por convenio (solo para usuarios de finanzas)
+    // Normalizar rol del usuario para comparación
+    const userRole = req.user?.role || '';
+    const normalizedRole = userRole
+      .toUpperCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .trim()
+      .replace(/\s+/g, '');
+    const isFinanzas = normalizedRole === 'FINANZAS';
+    
+    // Solo aplicar filtro de convenio si el usuario es de finanzas
+    if (isFinanzas && convenio && convenio.trim() !== '') {
+      where.convenio = {
+        contains: convenio.trim(),
+        mode: 'insensitive', // Búsqueda case-insensitive
+      };
+    }
 
     const [episodes, total] = await Promise.all([
       prisma.episodio.findMany({
+        where,
         skip,
         take: pageSize,
         include: {
@@ -322,7 +371,7 @@ router.get('/episodios/final', requireAuth, async (req: Request, res: Response) 
         id: 'desc',
       },
       }),
-      prisma.episodio.count(),
+      prisma.episodio.count({ where }),
     ]);
 
     // Helper para convertir Decimal a Number
