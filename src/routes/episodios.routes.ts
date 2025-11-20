@@ -913,18 +913,86 @@ const finanzasFieldMapping: Record<string, string> = {
   // valorGRD: NO editable, se calcula automáticamente
 };
 
-// Actualizar episodio parcialmente (PATCH) - Funcionalidad de Finanzas
+// Actualizar episodio parcialmente (PATCH) - Funcionalidad de Finanzas, Gestión y Codificador
 router.patch('/episodios/:id', 
   requireAuth, 
-  // 1. MODIFICACIÓN: Permitir a 'gestion' además de 'finanzas'
-  requireRole(['finanzas', 'FINANZAS', 'gestion', 'GESTION']), 
+  // Permitir a 'gestion', 'finanzas' y 'codificador'
+  requireRole(['finanzas', 'FINANZAS', 'gestion', 'GESTION', 'codificador', 'CODIFICADOR']), 
   async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     
+    // Obtener rol del usuario y normalizarlo
+    const userRole = req.user?.role || '';
+    const normalizedRole = userRole
+      .toUpperCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .trim()
+      .replace(/\s+/g, '');
+    const isCodificador = normalizedRole === 'CODIFICADOR';
+    const isFinanzas = normalizedRole === 'FINANZAS';
+    const isGestion = normalizedRole === 'GESTION';
+    
+    // Log para debug
+    console.log('🔍 PATCH /episodios/:id - Información del usuario:', {
+      userRole: userRole,
+      normalizedRole: normalizedRole,
+      isCodificador: isCodificador,
+      isFinanzas: isFinanzas,
+      isGestion: isGestion,
+      userId: req.user?.id
+    });
+    
     // Ignorar valorGRD si viene en el request (se calculará automáticamente)
     const requestBody = { ...req.body };
     delete requestBody.valorGRD;
+
+    // Validar permisos según campos
+    // Campo AT (S/N) solo puede ser editado por codificador
+    // Campos AT Detalle y Monto AT solo pueden ser editados por finanzas
+    const campoAT = 'at';
+    const camposATFinanzas = ['atDetalle', 'montoAT'];
+    const camposSolicitados = Object.keys(requestBody);
+    const intentaEditarAT = camposSolicitados.includes(campoAT);
+    const intentaEditarATFinanzas = camposSolicitados.some(campo => camposATFinanzas.includes(campo));
+    
+    console.log('🔍 Validación de permisos AT:', {
+      camposSolicitados: camposSolicitados,
+      intentaEditarAT: intentaEditarAT,
+      intentaEditarATFinanzas: intentaEditarATFinanzas,
+      isCodificador: isCodificador,
+      isFinanzas: isFinanzas,
+      requestBody: requestBody
+    });
+    
+    // Validar campo AT (S/N) - solo codificador
+    if (intentaEditarAT && !isCodificador) {
+      console.log('❌ Acceso denegado: Usuario intenta editar campo AT (S/N) pero no es codificador');
+      return res.status(403).json({
+        message: 'No tienes permisos para editar el campo AT (S/N). Solo el perfil de codificador puede modificar este campo.',
+        error: 'Forbidden',
+        field: campoAT
+      });
+    }
+    
+    // Validar campos AT Detalle y Monto AT - solo finanzas
+    if (intentaEditarATFinanzas && !isFinanzas) {
+      console.log('❌ Acceso denegado: Usuario intenta editar campos AT Detalle/Monto AT pero no es finanzas');
+      return res.status(403).json({
+        message: 'No tienes permisos para editar los campos AT Detalle y Monto AT. Solo el perfil de finanzas puede modificar estos campos.',
+        error: 'Forbidden',
+        field: camposSolicitados.find(campo => camposATFinanzas.includes(campo)) || 'unknown'
+      });
+    }
+    
+    if (intentaEditarAT && isCodificador) {
+      console.log('✅ Usuario codificador puede editar campo AT (S/N)');
+    }
+    
+    if (intentaEditarATFinanzas && isFinanzas) {
+      console.log('✅ Usuario finanzas puede editar campos AT Detalle/Monto AT');
+    }
 
     // 2. MODIFICACIÓN: "Rescatar" el campo 'validado' (de gestión) ANTES de la validación
     const validadoValue = requestBody.validado;
