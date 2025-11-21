@@ -59,14 +59,16 @@ if (!rolesPermitidos.includes(userRole.toUpperCase())) {
 
 1. **Problema 1:** Cuando el frontend cambia AT de "Sí" a "No", envía el payload:
    ```json
-   { "at": "N", "atDetalle": null, "montoAT": 0 }
+   { "at": "N", "atDetalle": null }
    ```
+   **IMPORTANTE:** El frontend NO envía `montoAT` - solo envía `at` y `atDetalle: null`. El backend debe limpiar `montoAT` automáticamente cuando `at = 'N'`.
    El backend detecta que `atDetalle` está en el payload y rechaza la petición porque el rol no está en la lista permitida.
 
 2. **Problema 2:** Cuando el frontend guarda AT Detalle, envía el payload:
    ```json
-   { "atDetalle": "valor", "montoAT": 123 }
+   { "atDetalle": "valor" }
    ```
+   **IMPORTANTE:** El frontend NO envía `montoAT` - solo envía `atDetalle`. El backend debe autocompletar `montoAT` automáticamente.
    El backend rechaza la petición porque el rol `codificador` no está en la lista permitida.
 
 **La solución:** El backend debe verificar si `at` O `atDetalle` están en el payload, y si es así, PERMITIR al rol `codificador`, incluso si `montoAT` también viene en el payload (es parte de la autocompletación/limpieza automática).
@@ -192,26 +194,25 @@ router.patch('/api/episodios/:id', authenticateToken, async (req, res) => {
 - **Permiso requerido:** `codificador` (porque `at` está en el payload)
 - **Lógica:** El backend debe permitir que `codificador` envíe este payload.
 
-**Caso 2: Cambiar AT de "Sí" a "No" ⚠️ ESTE ES EL PROBLEMA**
-- **Payload enviado:** `{ "at": "N", "atDetalle": null, "montoAT": 0 }`
+**Caso 2: Cambiar AT de "Sí" a "No"**
+- **Payload enviado:** `{ "at": "N", "atDetalle": null }`
 - **Permiso requerido:** `codificador` (porque `at` está en el payload)
-- **Lógica:** El backend debe permitir que `codificador` envíe este payload completo. Los campos `atDetalle: null` y `montoAT: 0` son parte de la limpieza automática cuando `at = 'N'`. **NO rechazar porque `atDetalle` esté en el payload - es parte de la limpieza automática.**
+- **IMPORTANTE:** El frontend NO envía `montoAT` - solo envía `at` y `atDetalle: null`.
+- **Lógica:** El backend debe permitir que `codificador` envíe este payload. El backend debe limpiar automáticamente `montoAT = 0` cuando `at = 'N'`. **NO rechazar porque `atDetalle` esté en el payload (aunque sea `null`) - es parte de la limpieza automática.**
 
-**Caso 3: Guardar AT Detalle ⚠️ ESTE ES EL OTRO PROBLEMA**
-- **Payload enviado:** `{ "atDetalle": "valor del detalle", "montoAT": 12345 }`
+**Caso 3: Guardar AT Detalle**
+- **Payload enviado:** `{ "atDetalle": "valor del detalle" }`
 - **Permiso requerido:** `codificador` (porque `atDetalle` está en el payload)
-- **Lógica:** El backend debe permitir que `codificador` envíe este payload. El `montoAT` es parte de la autocompletación automática. **NO rechazar porque `montoAT` esté en el payload - es parte de la autocompletación.**
-
-**Caso 4: Limpiar AT Detalle (vaciar el campo)**
-- **Payload enviado:** `{ "atDetalle": null, "montoAT": 0 }`
-- **Permiso requerido:** `codificador` (porque `atDetalle` está en el payload, aunque sea null)
-- **Lógica:** El backend debe permitir que `codificador` envíe este payload.
+- **IMPORTANTE:** El frontend NO envía `montoAT` - solo envía `atDetalle`.
+- **Lógica:** El backend debe permitir que `codificador` envíe este payload. El backend debe autocompletar automáticamente `montoAT` consultando la tabla `ajustes_tecnologia`.
 
 **⚠️ REGLAS CRÍTICAS:**
-1. El backend **DEBE verificar** si `at` O `atDetalle` están presentes en el payload (incluso si es `null`).
-2. Si `at` O `atDetalle` están en el payload, el backend **DEBE permitir** al rol `codificador`, independientemente de si `montoAT` también viene.
-3. El backend **NO debe rechazar** si `montoAT` viene junto con `at` o `atDetalle` - es solo un campo derivado/autocompletado.
-4. El backend **NO debe verificar** permisos para `montoAT` por separado si `at` o `atDetalle` están en el payload.
+1. El backend **DEBE verificar** si `at` O `atDetalle` están presentes en el payload (incluso si `atDetalle` es `null`).
+2. Si `at` O `atDetalle` están en el payload, el backend **DEBE permitir** al rol `codificador`.
+3. **El frontend NUNCA envía `montoAT`** - solo envía `at` y/o `atDetalle`. El backend debe autocompletar/limpiar `montoAT` automáticamente.
+4. Si el payload contiene `montoAT` sin `at` ni `atDetalle`, el backend **DEBE rechazar** - nadie puede editar `montoAT` directamente.
+5. Cuando `at = 'N'`, el backend **DEBE limpiar automáticamente** `atDetalle = null` y `montoAT = 0`.
+6. Cuando se actualiza `atDetalle`, el backend **DEBE autocompletar automáticamente** `montoAT` consultando `ajustes_tecnologia`.
 
 ### 4. Verificación del Token
 
@@ -273,6 +274,18 @@ Con código HTTP `403 Forbidden`.
 - Función/Endpoint: `PATCH /api/episodios/:id`
 - Buscar: La línea que tiene el array `[finanzas, FINANZAS, gestion, GESTION]`
 - Acción: **Agregar `codificador` y `CODIFICADOR` a ese array**, o mejor aún, implementar la lógica de verificación por campo como se muestra en la sección 3.
+
+## ⚠️ IMPORTANTE: Payloads que Envía el Frontend
+
+**El frontend NO envía `montoAT` cuando guarda `atDetalle`**. Solo envía:
+- `{ "atDetalle": "valor" }`
+
+El backend **DEBE autocompletar `montoAT`** automáticamente según el `atDetalle` seleccionado, consultando la tabla `ajustes_tecnologia`.
+
+**Cuando se cambia AT de "Sí" a "No", el frontend envía:**
+- `{ "at": "N", "atDetalle": null, "montoAT": 0 }`
+
+En este caso, el backend **DEBE aceptar** este payload completo del rol `codificador` porque se están limpiando los campos automáticamente.
 
 **Ejemplo de dónde buscar:**
 ```typescript

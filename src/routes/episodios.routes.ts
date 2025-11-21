@@ -1058,18 +1058,16 @@ router.patch('/episodios/:id',
 
     // Validaciones de reglas de negocio
     // Si at === false (o 'N'), atDetalle debe ser null y montoAT debe ser 0
+    // IMPORTANTE: Cuando at = 'N', siempre limpiar atDetalle y montoAT, incluso si vienen en el payload
     if (updateData.atSn === false) {
       updateData.atDetalle = null;
-      // Solo establecer montoAT a 0 si no viene explícitamente en el request
-      // (el codificador no puede editar montoAT directamente, pero se autocompleta)
-      if (!validatedValue.montoAT && updateData.montoAt === undefined) {
-        updateData.montoAt = 0;
-      }
+      updateData.montoAt = 0;
+      console.log('🧹 Limpiando atDetalle y montoAT porque AT = N');
     }
 
     // Validación y autocompletado de montoAT cuando se actualiza atDetalle
-    // Opción 1: Permitir override manual si el frontend envía montoAT explícitamente
-    const montoATEnviadoExplicitamente = validatedValue.montoAT !== undefined || updateData.montoAt !== undefined;
+    // IMPORTANTE: El frontend NO envía montoAT cuando guarda atDetalle - solo envía atDetalle
+    // El backend DEBE autocompletar montoAT automáticamente consultando ajustes_tecnologia
     let ajusteTecnologiaEncontrado: any = null;
     
     if (updateData.atDetalle !== undefined) {
@@ -1091,36 +1089,20 @@ router.patch('/episodios/:id',
           });
         }
         
-        // Autocompletar montoAT si se encontró el ajuste y tiene monto válido
+        // Autocompletar montoAT automáticamente si se encontró el ajuste y tiene monto válido
         if (ajusteTecnologiaEncontrado.monto !== null && ajusteTecnologiaEncontrado.monto !== undefined) {
-          // Solo autocompletar si el frontend NO envió montoAT explícitamente (permitir override)
-          if (!montoATEnviadoExplicitamente) {
-            updateData.montoAt = ajusteTecnologiaEncontrado.monto;
-            if (process.env.NODE_ENV === 'development') {
-              console.log(`💰 Autocompletado montoAT: ${ajusteTecnologiaEncontrado.monto} para atDetalle: "${atDetalle}"`);
-            }
-          } else {
-            if (process.env.NODE_ENV === 'development') {
-              console.log(`ℹ️ montoAT enviado explícitamente (${validatedValue.montoAT || updateData.montoAt}), manteniendo valor del frontend`);
-            }
-          }
+          // SIEMPRE autocompletar montoAT (el frontend no lo envía cuando guarda atDetalle)
+          updateData.montoAt = ajusteTecnologiaEncontrado.monto;
+          console.log(`💰 Autocompletado montoAT: ${ajusteTecnologiaEncontrado.monto} para atDetalle: "${atDetalle}"`);
         } else {
-          // Si el ajuste existe pero el monto es null/undefined
-          if (!montoATEnviadoExplicitamente) {
-            // Mantener montoAT existente (no actualizamos aquí)
-            if (process.env.NODE_ENV === 'development') {
-              console.log(`⚠️ Ajuste encontrado pero monto es null para atDetalle: "${atDetalle}", manteniendo montoAT existente`);
-            }
-          }
+          // Si el ajuste existe pero el monto es null/undefined, establecer montoAT a 0
+          updateData.montoAt = 0;
+          console.warn(`⚠️ Ajuste encontrado pero monto es null para atDetalle: "${atDetalle}". Estableciendo montoAT a 0.`);
         }
       } else {
         // Si atDetalle es null o vacío, establecer montoAT a 0
-        if (!montoATEnviadoExplicitamente) {
-          updateData.montoAt = 0;
-          if (process.env.NODE_ENV === 'development') {
-            console.log(`🔄 atDetalle es null/vacío, estableciendo montoAT a 0`);
-          }
-        }
+        updateData.montoAt = 0;
+        console.log(`🧹 atDetalle es null/vacío. Estableciendo montoAT a 0.`);
       }
     }
 
