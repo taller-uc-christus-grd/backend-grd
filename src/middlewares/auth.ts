@@ -49,11 +49,16 @@ export function requireRole(roles: string[]) {
     const userRoleNormalized = normalizeRole(req.user.role);
     const rolesNormalized = roles.map(r => normalizeRole(r));
 
+    // DEBUG: Log para verificar qué roles se están comparando
+    console.log(`🔍 requireRole - Rol usuario: "${req.user.role}" (normalizado: "${userRoleNormalized}")`);
+    console.log(`🔍 requireRole - Roles permitidos: [${roles.join(', ')}] (normalizados: [${rolesNormalized.join(', ')}])`);
+
     if (!rolesNormalized.includes(userRoleNormalized)) {
       console.log(`❌ Acceso denegado: Rol del usuario "${req.user.role}" (normalizado: "${userRoleNormalized}") no está en [${roles.join(', ')}] (normalizados: [${rolesNormalized.join(', ')}])`);
       return res.status(403).json({ message: 'Acceso denegado' });
     }
 
+    console.log(`✅ requireRole - Acceso permitido para rol: "${req.user.role}"`);
     next();
   };
 }

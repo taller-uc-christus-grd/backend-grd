@@ -212,9 +212,9 @@ async function processRow(row: RawRow) {
       montoRn: isNumeric(row['Facturación Total del episodio'])
         ? parseFloat(row['Facturación Total del episodio'])
         : 0,
-      pesoGrd: isNumeric(row['Peso GRD Medio (Todos)'])
+      pesoGrd: isNumeric(row['Peso GRD Medio (Todos)']) // Mapea la columna "Peso GRD Medio (Todos)"
         ? parseFloat(row['Peso GRD Medio (Todos)'])
-        : 0,
+        : null,
         
       inlierOutlier: cleanString(row['IR Alta Inlier / Outlier']),
       

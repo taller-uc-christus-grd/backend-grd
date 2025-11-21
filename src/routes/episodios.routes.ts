@@ -197,7 +197,8 @@ function normalizeEpisodeResponse(episode: any): any {
     
     // Campos de solo lectura
     grdCodigo: episode.grd?.codigo || '',
-    peso: toNumber(episode.pesoGrd), // SIEMPRE number o null
+    peso: toNumber(episode.pesoGrd), // SIEMPRE number o null (para compatibilidad)
+    pesoGrd: toNumber(episode.pesoGrd), // SIEMPRE number o null (nuevo campo "Peso GRD Medio (Todos)")
     inlierOutlier: episode.inlierOutlier || '',
     grupoDentroNorma: episode.grupoEnNorma || false,
     diasEstada: toInteger(episode.diasEstada), // SIEMPRE integer o null
@@ -772,16 +773,21 @@ router.put('/episodios/:id', requireAuth, async (req: Request, res: Response) =>
   }
 });
 
-// Esquema de validación específico para campos de finanzas (PATCH)
-// Validamos con nombres del frontend, luego mapeamos a nombres de BD
-// Acepta 'at' como boolean O string ("S"/"N") para retrocompatibilidad
-const finanzasSchema = Joi.object({
-  estadoRN: Joi.string().valid('Aprobado', 'Pendiente', 'Rechazado').allow(null, '').optional(),
+// Esquema de validación específico para campos de codificador (PATCH)
+// Solo permite editar 'at' y 'atDetalle'
+const codificadorSchema = Joi.object({
   at: Joi.alternatives().try(
     Joi.boolean(),
     Joi.string().valid('S', 's', 'N', 'n')
   ).optional(),
   atDetalle: Joi.string().allow(null, '').optional(),
+}).unknown(false); // No permitir campos desconocidos
+
+// Esquema de validación específico para campos de finanzas (PATCH)
+// Validamos con nombres del frontend, luego mapeamos a nombres de BD
+// NOTA: 'at' y 'atDetalle' NO están permitidos para finanzas/gestion
+const finanzasSchema = Joi.object({
+  estadoRN: Joi.string().valid('Aprobado', 'Pendiente', 'Rechazado').allow(null, '').optional(),
   montoAT: Joi.alternatives().try(
     Joi.number().min(0),
     Joi.string().pattern(/^\d+(\.\d+)?$/).min(0)
@@ -827,30 +833,118 @@ const finanzasFieldMapping: Record<string, string> = {
   // valorGRD: NO editable, se calcula automáticamente
 };
 
-// Actualizar episodio parcialmente (PATCH) - Funcionalidad de Finanzas
+// Actualizar episodio parcialmente (PATCH) - Funcionalidad de Finanzas, Gestión y Codificador
 router.patch('/episodios/:id', 
   requireAuth, 
-  // 1. MODIFICACIÓN: Permitir a 'gestion' además de 'finanzas'
-  requireRole(['finanzas', 'FINANZAS', 'gestion', 'GESTION']), 
+  // Permitir a finanzas, gestion y codificador
+  requireRole(['finanzas', 'FINANZAS', 'gestion', 'GESTION', 'codificador', 'CODIFICADOR']), 
   async (req: Request, res: Response) => {
+  // DEBUG: Verificar que el código se está ejecutando
+  console.log('🔍 PATCH /episodios/:id - Código actualizado con codificador - VERSIÓN 2.0');
+  console.log('🔍 Roles permitidos en requireRole:', ['finanzas', 'FINANZAS', 'gestion', 'GESTION', 'codificador', 'CODIFICADOR']);
   try {
     const { id } = req.params;
+    const userRole = req.user?.role || '';
+    console.log('🔍 Rol del usuario recibido:', userRole);
     
     // Ignorar valorGRD si viene en el request (se calculará automáticamente)
     const requestBody = { ...req.body };
     delete requestBody.valorGRD;
+    
+    // Verificar qué campos se están intentando actualizar
+    // IMPORTANTE: montoAT siempre viene junto con at o atDetalle, pero NO se considera un campo editable
+    // Es solo una consecuencia automática de editar at o atDetalle
+    const camposATEditables = ['at', 'atDetalle'];
+    const camposEditablesEnPayload = camposATEditables.filter(campo => campo in requestBody);
+    const otrosCampos = Object.keys(requestBody).filter(
+      campo => !camposATEditables.includes(campo) && campo !== 'montoAT' && campo !== 'validado' && campo !== 'valorGRD'
+    );
+    const userRoleUpper = userRole.toUpperCase();
+    
+    console.log('🔐 Verificando permisos para PATCH /api/episodios/:id:', {
+      rol: userRole,
+      camposATEditables: camposEditablesEnPayload,
+      otrosCampos: otrosCampos,
+      montoATEnPayload: 'montoAT' in requestBody,
+      payloadCompleto: requestBody
+    });
+    
+    // CASO 1: Si está intentando editar 'at' o 'atDetalle' directamente, SOLO codificador puede hacerlo
+    // ⚠️ IMPORTANTE: Incluso si montoAT viene junto, es parte de la autocompletación/limpieza automática
+    if (camposEditablesEnPayload.length > 0) {
+      if (userRoleUpper !== 'CODIFICADOR') {
+        return res.status(403).json({
+          message: `Acceso denegado: Solo el rol codificador puede editar los campos AT(S/N) y AT Detalle. Rol actual: "${userRole}".`,
+          error: 'FORBIDDEN',
+          campos: camposEditablesEnPayload,
+          rolActual: userRole,
+          camposRequeridos: ['at', 'atDetalle']
+        });
+      }
+      // Si el rol es CODIFICADOR y está editando at o atDetalle, permitir
+      // Incluso si montoAT viene en el payload, es aceptable porque se autocompleta
+      console.log('✅ Permiso concedido para codificador editando:', camposEditablesEnPayload);
+    }
+    
+    // CASO 2: Si está intentando editar otros campos (pero NO at ni atDetalle), permitir finanzas y gestion
+    if (otrosCampos.length > 0) {
+      const rolesPermitidosParaOtros = ['FINANZAS', 'GESTION'];
+      if (!rolesPermitidosParaOtros.includes(userRoleUpper)) {
+        return res.status(403).json({
+          message: `Acceso denegado: Rol del usuario "${userRole}" no está permitido para editar estos campos.`,
+          error: 'FORBIDDEN',
+          rolActual: userRole,
+          campos: otrosCampos
+        });
+      }
+      console.log('✅ Permiso concedido para', userRole, 'editando:', otrosCampos);
+    }
+    
+    // CASO ESPECIAL: Si el payload solo contiene montoAT sin at ni atDetalle
+    // Esto no debería pasar desde el frontend, pero por seguridad rechazar
+    if ('montoAT' in requestBody && camposEditablesEnPayload.length === 0 && otrosCampos.length === 0) {
+      return res.status(403).json({
+        message: 'Acceso denegado: El campo montoAT no puede editarse directamente. Solo se autocompleta al editar AT Detalle.',
+        error: 'FORBIDDEN',
+        rolActual: userRole
+      });
+    }
+    
+    console.log('✅ Permisos verificados correctamente. Procediendo con actualización...');
 
     // 2. MODIFICACIÓN: "Rescatar" el campo 'validado' (de gestión) ANTES de la validación
     const validadoValue = requestBody.validado;
-    // Lo quitamos temporalmente para que 'finanzasSchema' no lo elimine con stripUnknown
+    // Lo quitamos temporalmente para que los esquemas no lo eliminen con stripUnknown
     delete requestBody.validado; 
 
-    // Validar campos según esquema de finanzas (con nombres del frontend)
-    // Solo validar si hay campos de finanzas (no solo validado)
+    // Validar campos según el rol del usuario
     let validatedValue: any = {};
     if (Object.keys(requestBody).length > 0) {
-      const { error, value } = finanzasSchema.validate(requestBody, {
-        stripUnknown: true, // Esto limpia SOLO los campos que no son de finanzas
+      let schema;
+      let errorMessagePrefix = '';
+      
+      if (userRole.toLowerCase() === 'codificador') {
+        // Codificador solo puede editar 'at' y 'atDetalle'
+        schema = codificadorSchema;
+        errorMessagePrefix = 'Error de validación (codificador)';
+      } else {
+        // Finanzas y Gestión usan el esquema de finanzas (sin 'at' y 'atDetalle')
+        schema = finanzasSchema;
+        errorMessagePrefix = 'Error de validación (finanzas/gestión)';
+        
+        // Verificar que no intente editar 'at' o 'atDetalle' (ya validado arriba, pero por seguridad)
+        if ('at' in requestBody || 'atDetalle' in requestBody) {
+          return res.status(403).json({
+            message: 'Acceso denegado: Solo el rol codificador puede editar los campos AT(S/N) y AT Detalle.',
+            error: 'FORBIDDEN',
+            campos: ['at', 'atDetalle'].filter(c => c in requestBody),
+            rolActual: userRole
+          });
+        }
+      }
+      
+      const { error, value } = schema.validate(requestBody, {
+        stripUnknown: true,
         abortEarly: false,
         presence: 'optional',
       });
@@ -903,6 +997,12 @@ router.patch('/episodios/:id',
 
     // Mapear campos del frontend a nombres de la base de datos
     const updateData: any = {};
+    
+    // Mapeo común para campos compartidos (at, atDetalle)
+    const commonFieldMapping: Record<string, string> = {
+      at: 'atSn',
+    };
+    
     for (const [key, value] of Object.entries(validatedValue)) {
       
       // 5. MODIFICACIÓN: Añadir 'validado' al mapeo
@@ -911,7 +1011,8 @@ router.patch('/episodios/:id',
         continue; // Saltar el resto del loop para esta clave
       }
 
-      const dbKey = finanzasFieldMapping[key] || key;
+      // Usar mapeo común o mapeo de finanzas según corresponda
+      const dbKey = commonFieldMapping[key] || finanzasFieldMapping[key] || key;
       
       // Normalizar campos antes de guardar
       if (dbKey === 'atSn') {
@@ -956,9 +1057,71 @@ router.patch('/episodios/:id',
     delete updateData.valorGrd; // valorGRD NO es editable, siempre se calcula
 
     // Validaciones de reglas de negocio
-    // Si at === false, atDetalle debe ser null
-    if (updateData.atSn === false && updateData.atDetalle !== undefined) {
+    // Si at === false (o 'N'), atDetalle debe ser null y montoAT debe ser 0
+    if (updateData.atSn === false) {
       updateData.atDetalle = null;
+      // Solo establecer montoAT a 0 si no viene explícitamente en el request
+      // (el codificador no puede editar montoAT directamente, pero se autocompleta)
+      if (!validatedValue.montoAT && updateData.montoAt === undefined) {
+        updateData.montoAt = 0;
+      }
+    }
+
+    // Validación y autocompletado de montoAT cuando se actualiza atDetalle
+    // Opción 1: Permitir override manual si el frontend envía montoAT explícitamente
+    const montoATEnviadoExplicitamente = validatedValue.montoAT !== undefined || updateData.montoAt !== undefined;
+    let ajusteTecnologiaEncontrado: any = null;
+    
+    if (updateData.atDetalle !== undefined) {
+      const atDetalle = updateData.atDetalle;
+      
+      if (atDetalle && typeof atDetalle === 'string' && atDetalle.trim() !== '') {
+        // Buscar el ajuste de tecnología correspondiente (una sola búsqueda)
+        ajusteTecnologiaEncontrado = await prisma.ajusteTecnologia.findFirst({
+          where: {
+            at: atDetalle.trim(),
+          },
+        });
+
+        // Validación: verificar que atDetalle exista en ajustes_tecnologia.at
+        if (!ajusteTecnologiaEncontrado) {
+          return res.status(400).json({
+            error: 'ValidationError',
+            message: `El valor de atDetalle "${atDetalle}" no existe en la tabla de ajustes de tecnología`,
+          });
+        }
+        
+        // Autocompletar montoAT si se encontró el ajuste y tiene monto válido
+        if (ajusteTecnologiaEncontrado.monto !== null && ajusteTecnologiaEncontrado.monto !== undefined) {
+          // Solo autocompletar si el frontend NO envió montoAT explícitamente (permitir override)
+          if (!montoATEnviadoExplicitamente) {
+            updateData.montoAt = ajusteTecnologiaEncontrado.monto;
+            if (process.env.NODE_ENV === 'development') {
+              console.log(`💰 Autocompletado montoAT: ${ajusteTecnologiaEncontrado.monto} para atDetalle: "${atDetalle}"`);
+            }
+          } else {
+            if (process.env.NODE_ENV === 'development') {
+              console.log(`ℹ️ montoAT enviado explícitamente (${validatedValue.montoAT || updateData.montoAt}), manteniendo valor del frontend`);
+            }
+          }
+        } else {
+          // Si el ajuste existe pero el monto es null/undefined
+          if (!montoATEnviadoExplicitamente) {
+            // Mantener montoAT existente (no actualizamos aquí)
+            if (process.env.NODE_ENV === 'development') {
+              console.log(`⚠️ Ajuste encontrado pero monto es null para atDetalle: "${atDetalle}", manteniendo montoAT existente`);
+            }
+          }
+        }
+      } else {
+        // Si atDetalle es null o vacío, establecer montoAT a 0
+        if (!montoATEnviadoExplicitamente) {
+          updateData.montoAt = 0;
+          if (process.env.NODE_ENV === 'development') {
+            console.log(`🔄 atDetalle es null/vacío, estableciendo montoAT a 0`);
+          }
+        }
+      }
     }
 
     // Manejar documentacion: Prisma espera Json (objeto/array), no string
@@ -1226,9 +1389,9 @@ async function processRow(row: RawRow) {
       montoRn: isNumeric(row['Facturación Total del episodio']) // Asegúrate que esta columna exista en tu excel
         ? parseFloat(row['Facturación Total del episodio'])
         : 0,
-      pesoGrd: isNumeric(row['Peso Medio [Norma IR]']) // Usamos la columna correcta
-        ? parseFloat(row['Peso Medio [Norma IR]'])
-        : 0,
+      pesoGrd: isNumeric(row['Peso GRD Medio (Todos)']) // Mapea la columna "Peso GRD Medio (Todos)"
+        ? parseFloat(row['Peso GRD Medio (Todos)'])
+        : null,
       inlierOutlier: cleanString(row['IR Alta Inlier / Outlier']),
       diasEstada: isNumeric(row['Estancia real del episodio'])
         ? parseInt(String(row['Estancia real del episodio']), 10)
@@ -1349,7 +1512,8 @@ router.post('/episodios/import', requireAuth, upload.single('file'), async (req:
         fechaAlta: e.fechaAlta ? e.fechaAlta.toISOString().split('T')[0] : '', // <-- ANTES DECÍA [MAIN]
         servicioAlta: e.servicioAlta || '',
         grdCodigo: e.grd?.codigo || '',
-        peso: toNumber(e.pesoGd),
+        peso: toNumber(e.pesoGrd), // Para compatibilidad
+        pesoGrd: toNumber(e.pesoGrd), // Campo "Peso GRD Medio (Todos)"
         montoRN: toNumber(e.montoRn),
         inlierOutlier: e.inlierOutlier || '',
       })),

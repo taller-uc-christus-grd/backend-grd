@@ -1,0 +1,17 @@
+-- AlterTable
+ALTER TABLE "PrecioConvenio" ALTER COLUMN "aseguradora" DROP NOT NULL,
+ALTER COLUMN "aseguradora" SET DEFAULT '',
+ALTER COLUMN "nombre_asegi" DROP NOT NULL,
+ALTER COLUMN "nombre_asegi" SET DEFAULT '',
+ALTER COLUMN "convenio" DROP NOT NULL,
+ALTER COLUMN "convenio" SET DEFAULT '',
+ALTER COLUMN "descr_convenio" DROP NOT NULL,
+ALTER COLUMN "descr_convenio" SET DEFAULT '',
+ALTER COLUMN "tipoAsegurad" DROP NOT NULL,
+ALTER COLUMN "tipoAsegurad" SET DEFAULT '',
+ALTER COLUMN "tipoConvenio" DROP NOT NULL,
+ALTER COLUMN "tipoConvenio" SET DEFAULT '',
+ALTER COLUMN "fechaAdmision" DROP NOT NULL,
+ALTER COLUMN "fechaFin" DROP NOT NULL,
+ALTER COLUMN "precio" DROP NOT NULL,
+ALTER COLUMN "precio" SET DEFAULT 0;
