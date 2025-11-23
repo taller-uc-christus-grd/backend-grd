@@ -91,6 +91,139 @@ function calcularMontoFinal(
   return vGRD + mAT + pOutlier + pDemora;
 }
 
+/**
+ * Calcula el tramo basado en el peso GRD para convenios con sistema de tramos (FNS012, FNS026)
+ * @param pesoGRD Peso GRD del episodio
+ * @returns 'T1', 'T2', 'T3' o null si no se puede determinar
+ */
+function calcularTramo(pesoGRD: number | null | undefined): 'T1' | 'T2' | 'T3' | null {
+  if (pesoGRD === null || pesoGRD === undefined) {
+    return null; // No se puede determinar el tramo sin peso
+  }
+  
+  if (pesoGRD >= 0 && pesoGRD <= 1.5) {
+    return 'T1';
+  } else if (pesoGRD > 1.5 && pesoGRD <= 2.5) {
+    return 'T2';
+  } else if (pesoGRD > 2.5) {
+    return 'T3';
+  }
+  
+  return null; // Peso negativo (no debería ocurrir)
+}
+
+/**
+ * Obtiene el precio base por tramo basándose en el convenio y el peso GRD
+ * @param convenio Código del convenio (FNS012, FNS026, FNS019, CH0041)
+ * @param pesoGRD Peso GRD del episodio
+ * @returns Precio base calculado o null si no se puede determinar
+ */
+async function obtenerPrecioBaseTramo(
+  convenio: string | null | undefined,
+  pesoGRD: number | null | undefined
+): Promise<number | null> {
+  // Validar que el convenio esté presente
+  if (!convenio || typeof convenio !== 'string' || convenio.trim() === '') {
+    if (process.env.NODE_ENV === 'development') {
+      console.warn('⚠️ obtenerPrecioBaseTramo: Convenio no proporcionado o inválido');
+    }
+    return null;
+  }
+
+  const convenioNormalizado = convenio.trim().toUpperCase();
+  
+  // Determinar si el convenio usa tramos o precio único
+  const conveniosConTramos = ['FNS012', 'FNS026'];
+  const conveniosPrecioUnico = ['FNS019', 'CH0041'];
+  
+  if (conveniosConTramos.includes(convenioNormalizado)) {
+    // Calcular tramo basado en peso GRD
+    const tramo = calcularTramo(pesoGRD);
+    if (!tramo) {
+      if (process.env.NODE_ENV === 'development') {
+        console.warn(`⚠️ obtenerPrecioBaseTramo: No se pudo determinar el tramo para convenio ${convenioNormalizado} con peso GRD ${pesoGRD}`);
+      }
+      return null; // No se puede determinar el tramo
+    }
+    
+    // Buscar en precios_convenios (sin validar fechas)
+    const precioRegistro = await prisma.precioConvenio.findFirst({
+      where: {
+        convenio: convenioNormalizado,
+        tramo: tramo
+      },
+      orderBy: {
+        createdAt: 'desc' // Si hay múltiples, tomar el más reciente
+      }
+    });
+    
+    if (!precioRegistro || precioRegistro.precio === null || precioRegistro.precio === undefined) {
+      if (process.env.NODE_ENV === 'development') {
+        console.warn(`⚠️ obtenerPrecioBaseTramo: No se encontró precio para convenio ${convenioNormalizado} y tramo ${tramo}`);
+      }
+      return null;
+    }
+    
+    const precio = typeof precioRegistro.precio === 'number' 
+      ? precioRegistro.precio 
+      : parseFloat(String(precioRegistro.precio));
+    
+    if (isNaN(precio) || !isFinite(precio)) {
+      if (process.env.NODE_ENV === 'development') {
+        console.warn(`⚠️ obtenerPrecioBaseTramo: Precio inválido para convenio ${convenioNormalizado} y tramo ${tramo}: ${precioRegistro.precio}`);
+      }
+      return null;
+    }
+    
+    if (process.env.NODE_ENV === 'development') {
+      console.log(`✅ obtenerPrecioBaseTramo: Precio encontrado para ${convenioNormalizado} ${tramo}: ${precio}`);
+    }
+    
+    return precio;
+    
+  } else if (conveniosPrecioUnico.includes(convenioNormalizado)) {
+    // Buscar precio único (ignorar tramo y fechas)
+    const precioRegistro = await prisma.precioConvenio.findFirst({
+      where: {
+        convenio: convenioNormalizado
+      },
+      orderBy: {
+        createdAt: 'desc' // Si hay múltiples, tomar el más reciente
+      }
+    });
+    
+    if (!precioRegistro || precioRegistro.precio === null || precioRegistro.precio === undefined) {
+      if (process.env.NODE_ENV === 'development') {
+        console.warn(`⚠️ obtenerPrecioBaseTramo: No se encontró precio para convenio ${convenioNormalizado}`);
+      }
+      return null;
+    }
+    
+    const precio = typeof precioRegistro.precio === 'number' 
+      ? precioRegistro.precio 
+      : parseFloat(String(precioRegistro.precio));
+    
+    if (isNaN(precio) || !isFinite(precio)) {
+      if (process.env.NODE_ENV === 'development') {
+        console.warn(`⚠️ obtenerPrecioBaseTramo: Precio inválido para convenio ${convenioNormalizado}: ${precioRegistro.precio}`);
+      }
+      return null;
+    }
+    
+    if (process.env.NODE_ENV === 'development') {
+      console.log(`✅ obtenerPrecioBaseTramo: Precio encontrado para ${convenioNormalizado}: ${precio}`);
+    }
+    
+    return precio;
+  }
+  
+  // Si el convenio no está en ninguna de las listas, retornar null
+  if (process.env.NODE_ENV === 'development') {
+    console.warn(`⚠️ obtenerPrecioBaseTramo: Convenio desconocido: ${convenioNormalizado}`);
+  }
+  return null;
+}
+
 // Función para normalizar datos de episodio antes de enviar al frontend
 function normalizeEpisodeResponse(episode: any): any {
   // Normalizar campo 'at': SIEMPRE devolver "S" o "N" (string)
@@ -136,8 +269,12 @@ function normalizeEpisodeResponse(episode: any): any {
 
   // Normalizar atDetalle: siempre string o null (nunca undefined o "")
   let atDetalle: string | null = null;
-  if (episode.atDetalle && typeof episode.atDetalle === 'string' && episode.atDetalle.trim() !== '') {
-    atDetalle = episode.atDetalle;
+  if (episode.atDetalle !== null && episode.atDetalle !== undefined) {
+    if (typeof episode.atDetalle === 'string' && episode.atDetalle.trim() !== '') {
+      atDetalle = episode.atDetalle;
+    }
+    // Si es null explícitamente, mantenerlo como null
+    // Si es undefined, mantenerlo como null (no undefined)
   }
 
   // Normalizar documentacion
@@ -250,6 +387,7 @@ const episodioSchema = Joi.object({
   especialidad: Joi.string().optional().allow(null),
   anio: Joi.number().integer().optional().allow(null),
   mes: Joi.number().integer().optional().allow(null),
+  convenio: Joi.string().optional().allow(null), // Código del convenio (ej: 'FNS012', 'FNS026', 'FNS019', 'CH0041')
   pacienteId: Joi.number().integer().optional().allow(null),
   grdId: Joi.number().integer().optional().allow(null),
 });
@@ -322,6 +460,23 @@ router.get('/episodios/final', requireAuth, async (req: Request, res: Response) 
       prisma.episodio.count(),
     ]);
 
+    // Recalcular precioBaseTramo para episodios que lo necesiten (lazy calculation)
+    for (const episode of episodes) {
+      if (!episode.precioBaseTramo && episode.convenio) {
+        const pesoGRD = episode.pesoGrd ? Number(episode.pesoGrd) : null;
+        const precioCalculado = await obtenerPrecioBaseTramo(episode.convenio, pesoGRD);
+        if (precioCalculado !== null) {
+          // Actualizar en la base de datos para evitar recalcular en cada consulta
+          await prisma.episodio.update({
+            where: { id: episode.id },
+            data: { precioBaseTramo: precioCalculado }
+          });
+          // Actualizar el objeto en memoria para esta respuesta
+          episode.precioBaseTramo = precioCalculado as any;
+        }
+      }
+    }
+
     // Helper para convertir Decimal a Number
     const toNumber = (value: any): number => {
       if (value === null || value === undefined) return 0;
@@ -335,8 +490,27 @@ router.get('/episodios/final', requireAuth, async (req: Request, res: Response) 
     // Usar la función normalizeEpisodeResponse para cada episodio
     const items = episodes.map((e: any) => {
       const normalized = normalizeEpisodeResponse(e);
+      
       // El endpoint /final tiene un formato ligeramente diferente, ajustar campos
-      return {
+      // IMPORTANTE: Asegurar que atDetalle siempre esté presente (null o string, nunca undefined)
+      // Si es undefined, establecerlo explícitamente como null para que se incluya en el JSON
+      const atDetalleValue = (normalized.atDetalle !== undefined && normalized.atDetalle !== null) 
+        ? normalized.atDetalle 
+        : null;
+      
+      // DEBUG: Verificar que atDetalle está presente
+      if (process.env.NODE_ENV === 'development') {
+        console.log(`🔍 GET /episodios/final - Episodio ${e.episodioCmdb || e.id}:`, {
+          atDetalleEnBD: e.atDetalle,
+          atDetalleNormalizado: normalized.atDetalle,
+          atDetalleValue: atDetalleValue,
+          tipo: typeof normalized.atDetalle,
+          keysEnNormalized: Object.keys(normalized).filter(k => k.includes('at'))
+        });
+      }
+      
+      // Construir el objeto de respuesta explícitamente para asegurar que atDetalle esté presente
+      const itemResponse: any = {
         episodio: normalized.episodio,
         nombre: normalized.nombre,
         rut: normalized.rut,
@@ -354,6 +528,7 @@ router.get('/episodios/final', requireAuth, async (req: Request, res: Response) 
         validado: normalized.validado,
         estadoRN: normalized.estadoRN,
         at: normalized.at,
+        atDetalle: atDetalleValue, // ⚠️ CRÍTICO: Incluir atDetalle en la respuesta (siempre null o string, nunca undefined)
         montoAT: normalized.montoAT,
         diasDemoraRescate: normalized.diasDemoraRescate,
         pagoDemora: normalized.pagoDemora,
@@ -362,6 +537,14 @@ router.get('/episodios/final', requireAuth, async (req: Request, res: Response) 
         valorGRD: normalized.valorGRD,
         montoFinal: normalized.montoFinal,
       };
+      
+      // VERIFICACIÓN FINAL: Asegurar que atDetalle esté presente en el objeto
+      if (!('atDetalle' in itemResponse)) {
+        itemResponse.atDetalle = null;
+        console.warn(`⚠️ atDetalle no estaba presente en itemResponse para episodio ${e.episodioCmdb || e.id}. Agregado como null.`);
+      }
+      
+      return itemResponse;
     });
 
     return res.json({
@@ -673,6 +856,25 @@ router.get('/episodios/:id', requireAuth, async (req: Request, res: Response) =>
 
     if (!episodio) {
       return res.status(404).json({ error: 'Episodio no encontrado' });
+    }
+    
+    // Recalcular precioBaseTramo si es necesario (lazy calculation)
+    if (!episodio.precioBaseTramo && episodio.convenio) {
+      const pesoGRD = episodio.pesoGrd ? Number(episodio.pesoGrd) : null;
+      const precioCalculado = await obtenerPrecioBaseTramo(episodio.convenio, pesoGRD);
+      if (precioCalculado !== null) {
+        // Actualizar en la base de datos
+        episodio = await prisma.episodio.update({
+          where: { id: episodio.id },
+          data: { precioBaseTramo: precioCalculado },
+          include: {
+            paciente: true,
+            grd: true,
+            diagnosticos: true,
+            respaldos: true,
+          },
+        });
+      }
     }
     
     // Normalizar respuesta antes de enviar
@@ -1179,24 +1381,56 @@ router.patch('/episodios/:id',
     }
 
     // Obtener valores actuales del episodio
-    const pesoActual = episodio.pesoGrd ? Number(episodio.pesoGrd) : 0;
-    const precioBaseTramoActual = episodio.precioBaseTramo ? Number(episodio.precioBaseTramo) : 0;
+    const pesoActual = episodio.pesoGrd ? Number(episodio.pesoGrd) : null;
+    const precioBaseTramoActual = episodio.precioBaseTramo ? Number(episodio.precioBaseTramo) : null;
+    const convenioActual = episodio.convenio;
     const montoATActual = episodio.montoAt ? Number(episodio.montoAt) : 0;
     const pagoOutlierSupActual = episodio.pagoOutlierSuperior ? Number(episodio.pagoOutlierSuperior) : 0;
     const pagoDemoraActual = episodio.pagoDemoraRescate ? Number(episodio.pagoDemoraRescate) : 0;
 
-    // Usar valores nuevos si vienen en el request, sino usar los actuales
-    // Si viene null explícitamente, usar 0 para el cálculo (pero guardar null en BD)
+    // Determinar valores finales (nuevos o actuales)
     // NOTA: pesoGrd NO es editable por finanzas, siempre usar el valor actual
     const peso = pesoActual;
-    const precioBaseTramo = updateData.precioBaseTramo !== undefined ? (updateData.precioBaseTramo ?? 0) : precioBaseTramoActual;
+    const convenio = updateData.convenio !== undefined ? updateData.convenio : convenioActual;
+    
+    // RECALCULAR precioBaseTramo automáticamente si:
+    // 1. Cambió el peso (puede cambiar el tramo para FNS012/FNS026)
+    // 2. Cambió el convenio
+    // 3. precioBaseTramo es null y hay convenio
+    // IMPORTANTE: Ignorar cualquier valor de precioBaseTramo que venga en el request (Opción A recomendada)
+    const pesoCambio = updateData.pesoGrd !== undefined && updateData.pesoGrd !== pesoActual;
+    const convenioCambio = updateData.convenio !== undefined && updateData.convenio !== convenioActual;
+    const necesitaRecalculo = pesoCambio || convenioCambio || (!precioBaseTramoActual && convenio);
+    
+    let precioBaseTramo: number | null = precioBaseTramoActual;
+    if (necesitaRecalculo && convenio) {
+      const pesoParaCalculo = pesoCambio && updateData.pesoGrd !== undefined 
+        ? Number(updateData.pesoGrd) 
+        : peso;
+      precioBaseTramo = await obtenerPrecioBaseTramo(convenio, pesoParaCalculo);
+      if (precioBaseTramo !== null) {
+        updateData.precioBaseTramo = precioBaseTramo;
+        if (process.env.NODE_ENV === 'development') {
+          console.log(`💰 Precio base recalculado para episodio ${episodio.id}: ${precioBaseTramo} (convenio: ${convenio}, peso: ${pesoParaCalculo})`);
+        }
+      }
+    } else if (updateData.precioBaseTramo !== undefined) {
+      // Si viene precioBaseTramo en el request pero no necesita recálculo, ignorarlo (mantener consistencia)
+      delete updateData.precioBaseTramo;
+      if (process.env.NODE_ENV === 'development') {
+        console.log(`⚠️ precioBaseTramo enviado en request ignorado (se recalcula automáticamente)`);
+      }
+    }
+    
+    // Usar el precio calculado para los cálculos siguientes
+    const precioBaseTramoParaCalculo = precioBaseTramo ?? 0;
     const montoAT = updateData.montoAt !== undefined ? (updateData.montoAt ?? 0) : montoATActual;
     const pagoOutlierSup = updateData.pagoOutlierSuperior !== undefined ? (updateData.pagoOutlierSuperior ?? 0) : pagoOutlierSupActual;
     const pagoDemora = updateData.pagoDemoraRescate !== undefined ? (updateData.pagoDemoraRescate ?? 0) : pagoDemoraActual;
 
     // PASO 1: SIEMPRE recalcular valorGRD = peso * precioBaseTramo
     // (ignorar cualquier valor que haya venido en el request)
-    const valorGRDCalculado = calcularValorGRD(peso, precioBaseTramo);
+    const valorGRDCalculado = calcularValorGRD(peso ?? 0, precioBaseTramoParaCalculo);
     updateData.valorGrd = valorGRDCalculado;
 
     // PASO 2: Calcular montoFinal usando el valorGRD calculado
@@ -1314,7 +1548,12 @@ async function validateRow(row: RawRow, index: number): Promise<boolean> {
 // ================== ¡MODIFICACIÓN 2: processRow! ===================
 // ===================================================================
 // Se usa prisma.grd.upsert() para crear el GRD si no existe.
-async function processRow(row: RawRow) {
+async function processRow(row: RawRow, rowIndex?: number) {
+  // Log muy visible para confirmar que el código se ejecuta
+  console.log('========================================');
+  console.log(`🔄 PROCESANDO FILA ${rowIndex || '?'} - Episodio: ${row['Episodio CMBD']}`);
+  console.log('========================================');
+  
   const rut = cleanString(row['RUT']);
   const nombre = cleanString(row['Nombre']);
   const grdCode = cleanString(row['IR GRD (Código)'])!;
@@ -1358,7 +1597,77 @@ async function processRow(row: RawRow) {
     },
   });
 
-  // 3. Crea el Episodio, ahora SÍ podemos vincular el grdId
+  // 3. Obtener datos para calcular precioBaseTramo
+  // Función auxiliar para buscar columnas de forma flexible (similar a catalogs.routes.ts)
+  const getColumnValue = (possibleNames: string[]): string | null => {
+    // Primero buscar coincidencia exacta
+    for (const name of possibleNames) {
+      const value = row[name];
+      if (value !== undefined && value !== null && String(value).trim() !== '') {
+        return cleanString(value);
+      }
+    }
+    // Si no se encuentra, buscar por nombre parcial (case-insensitive, ignorando espacios)
+    for (const key in row) {
+      for (const name of possibleNames) {
+        const normalizedKey = key.replace(/\s+/g, ' ').trim();
+        const normalizedName = name.replace(/\s+/g, ' ').trim();
+        if (normalizedKey.toLowerCase() === normalizedName.toLowerCase() || 
+            normalizedKey.toLowerCase().includes(normalizedName.toLowerCase()) ||
+            normalizedName.toLowerCase().includes(normalizedKey.toLowerCase())) {
+          const value = row[key];
+          if (value !== undefined && value !== null && String(value).trim() !== '') {
+            console.log(`🔍 Columna encontrada por coincidencia parcial: "${key}" -> "${name}"`);
+            return cleanString(value);
+          }
+        }
+      }
+    }
+    return null;
+  };
+
+  // Buscar convenio con múltiples variantes posibles
+  const convenio = getColumnValue([
+    'Convenios  (cod)',
+    'Convenios (cod)',
+    'Convenios(cod)',
+    'Convenios',
+    'Convenio',
+    'Código Convenio',
+    'Codigo Convenio'
+  ]);
+  
+  const pesoGRD = isNumeric(row['Peso GRD Medio (Todos)'])
+    ? parseFloat(row['Peso GRD Medio (Todos)'])
+    : null;
+  
+  // Log de depuración para la primera fila procesada (siempre mostrar, no solo en development)
+  if (rowIndex === 1) {
+    console.log('📋 Columnas disponibles en el CSV:', Object.keys(row));
+    console.log('🔍 Buscando columna de convenio...');
+    console.log(`🔍 Convenio encontrado: "${convenio}" para episodio ${row['Episodio CMBD']}`);
+  }
+  
+  // Calcular precioBaseTramo automáticamente si hay convenio
+  let precioBaseTramoCalculado: number | null = null;
+  if (convenio) {
+    precioBaseTramoCalculado = await obtenerPrecioBaseTramo(convenio, pesoGRD);
+    if (precioBaseTramoCalculado !== null) {
+      console.log(`💰 Precio base calculado para episodio ${row['Episodio CMBD']}: ${precioBaseTramoCalculado} (convenio: ${convenio}, peso: ${pesoGRD})`);
+    } else {
+      console.warn(`⚠️ No se pudo calcular precio base para episodio ${row['Episodio CMBD']} (convenio: ${convenio}, peso: ${pesoGRD})`);
+    }
+  } else {
+    // Solo mostrar warning en la primera fila para no saturar los logs
+    if (rowIndex === 1) {
+      const columnasConvenio = Object.keys(row).filter(k => k.toLowerCase().includes('conven'));
+      console.warn(`⚠️ Convenio no encontrado para episodio ${row['Episodio CMBD']}.`);
+      console.warn(`   Columnas que contienen "conven":`, columnasConvenio.length > 0 ? columnasConvenio : 'NINGUNA');
+      console.warn(`   Todas las columnas:`, Object.keys(row));
+    }
+  }
+
+  // 4. Crea el Episodio, ahora SÍ podemos vincular el grdId
   return await prisma.episodio.create({
     data: {
       centro: cleanString(row['Hospital (Descripción)']),
@@ -1371,9 +1680,9 @@ async function processRow(row: RawRow) {
       montoRn: isNumeric(row['Facturación Total del episodio']) // Asegúrate que esta columna exista en tu excel
         ? parseFloat(row['Facturación Total del episodio'])
         : 0,
-      pesoGrd: isNumeric(row['Peso GRD Medio (Todos)']) // Mapea la columna "Peso GRD Medio (Todos)"
-        ? parseFloat(row['Peso GRD Medio (Todos)'])
-        : null,
+      pesoGrd: pesoGRD, // Mapea la columna "Peso GRD Medio (Todos)"
+      convenio: convenio, // Guardar el convenio
+      precioBaseTramo: precioBaseTramoCalculado, // Precio base calculado automáticamente
       inlierOutlier: cleanString(row['IR Alta Inlier / Outlier']),
       diasEstada: isNumeric(row['Estancia real del episodio'])
         ? parseInt(String(row['Estancia real del episodio']), 10)
@@ -1445,8 +1754,8 @@ router.post('/episodios/import', requireAuth, upload.single('file'), async (req:
       if (isValid) {
         validRecords.push(row);
         try {
-          // Usamos el processRow modificado
-          const episode = await processRow(row);
+          // Usamos el processRow modificado (pasar el índice para logs)
+          const episode = await processRow(row, index);
           createdEpisodes.push(episode);
         } catch (err: any) {
           console.error(`Error procesando fila ${index}:`, err.message);

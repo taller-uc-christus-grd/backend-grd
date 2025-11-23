@@ -54,7 +54,7 @@ model Episodio {
   fechaAlta           DateTime?
   servicioAlta        String?
   estadoRn            String?
-  validado            Boolean?  // null = Pendiente, true = Aprobado, false = Rechazado
+  validado            Boolean? // null = Pendiente, true = Aprobado, false = Rechazado
   atSn                Boolean?
   atDetalle           String?
   montoAt             Decimal?              @db.Decimal(14, 2)
@@ -75,6 +75,7 @@ model Episodio {
   especialidad        String?
   anio                Int?
   mes                 Int?
+  convenio            String?               @db.VarChar(20) // Código del convenio (ej: 'FNS012', 'FNS026', 'FNS019', 'CH0041')
   pacienteId          Int?
   grdId               Int?
   createdAt           DateTime              @default(now())
@@ -99,7 +100,7 @@ model PrecioConvenio {
   descr_convenio String?   @default("") // Descripción del convenio (ej: "GRD CARDIOPATIA")
   tipoAsegurad   String?   @default("") // Tipo de aseguradora (ej: "Pública")
   tipoConvenio   String?   @default("") // Tipo de convenio (ej: "Público - GRD", "Público - GRD T1")
-  tramo          String?   // Tramo (puede ser null o vacío, ej: "T1", "T2", "T3")
+  tramo          String? // Tramo (puede ser null o vacío, ej: "T1", "T2", "T3")
   fechaAdmision  DateTime? // Fecha de admisión (ej: "29-08-2025") - opcional para permitir guardar campo por campo
   fechaFin       DateTime? // Fecha fin (ej: "31-12-2025") - opcional para permitir guardar campo por campo
   precio         Float?    @default(0) // Precio del convenio (ej: 84.536, 202.666)
@@ -108,10 +109,10 @@ model PrecioConvenio {
 }
 
 model AjusteTecnologia {
-  id       String   @id @default(uuid())
-  at       String?  @default("") // Descripción del AT (ej: "Stent mas dispositivo de liberación")
-  monto    Float?   @default(0)  // Monto asociado (ej: 51276)
-  
+  id    String  @id @default(uuid())
+  at    String? @default("") // Descripción del AT (ej: "Stent mas dispositivo de liberación")
+  monto Float?  @default(0) // Monto asociado (ej: 51276)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }

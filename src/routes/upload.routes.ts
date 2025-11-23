@@ -99,6 +99,98 @@ function cleanString(value?: any): string | null {
 }
 
 /**
+ * Calcula el tramo basado en el peso GRD para convenios con sistema de tramos (FNS012, FNS026)
+ */
+function calcularTramo(pesoGRD: number | null | undefined): 'T1' | 'T2' | 'T3' | null {
+  if (pesoGRD === null || pesoGRD === undefined) {
+    return null;
+  }
+  
+  if (pesoGRD >= 0 && pesoGRD <= 1.5) {
+    return 'T1';
+  } else if (pesoGRD > 1.5 && pesoGRD <= 2.5) {
+    return 'T2';
+  } else if (pesoGRD > 2.5) {
+    return 'T3';
+  }
+  
+  return null;
+}
+
+/**
+ * Obtiene el precio base por tramo basándose en el convenio y el peso GRD
+ */
+async function obtenerPrecioBaseTramo(
+  convenio: string | null | undefined,
+  pesoGRD: number | null | undefined
+): Promise<number | null> {
+  if (!convenio || typeof convenio !== 'string' || convenio.trim() === '') {
+    return null;
+  }
+
+  const convenioNormalizado = convenio.trim().toUpperCase();
+  const conveniosConTramos = ['FNS012', 'FNS026'];
+  const conveniosPrecioUnico = ['FNS019', 'CH0041'];
+  
+  if (conveniosConTramos.includes(convenioNormalizado)) {
+    const tramo = calcularTramo(pesoGRD);
+    if (!tramo) {
+      return null;
+    }
+    
+    const precioRegistro = await prisma.precioConvenio.findFirst({
+      where: {
+        convenio: convenioNormalizado,
+        tramo: tramo
+      },
+      orderBy: {
+        createdAt: 'desc'
+      }
+    });
+    
+    if (!precioRegistro || precioRegistro.precio === null || precioRegistro.precio === undefined) {
+      return null;
+    }
+    
+    const precio = typeof precioRegistro.precio === 'number' 
+      ? precioRegistro.precio 
+      : parseFloat(String(precioRegistro.precio));
+    
+    if (isNaN(precio) || !isFinite(precio)) {
+      return null;
+    }
+    
+    return precio;
+    
+  } else if (conveniosPrecioUnico.includes(convenioNormalizado)) {
+    const precioRegistro = await prisma.precioConvenio.findFirst({
+      where: {
+        convenio: convenioNormalizado
+      },
+      orderBy: {
+        createdAt: 'desc'
+      }
+    });
+    
+    if (!precioRegistro || precioRegistro.precio === null || precioRegistro.precio === undefined) {
+      return null;
+    }
+    
+    const precio = typeof precioRegistro.precio === 'number' 
+      ? precioRegistro.precio 
+      : parseFloat(String(precioRegistro.precio));
+    
+    if (isNaN(precio) || !isFinite(precio)) {
+      return null;
+    }
+    
+    return precio;
+  }
+  
+  return null;
+}
+
+/**
  * Valida una fila ANTES de procesarla.
  * ¡MODIFICADO con la validación de GRD!
  */
@@ -167,6 +259,10 @@ async function validateRow(row: RawRow, index: number): Promise<boolean> {
  * Se corrige el error de Prisma.Decimal.
  */
 async function processRow(row: RawRow) {
+  console.log('========================================');
+  console.log(`🔄 PROCESANDO FILA - Episodio: ${row['Episodio CMBD']}`);
+  console.log('========================================');
+  
   const rut = cleanString(row['RUT']);
   const nombre = cleanString(row['Nombre']);
   const grdCode = cleanString(row['IR GRD (Código)'])!; // Sabemos que no es nulo por validateRow
@@ -194,9 +290,62 @@ async function processRow(row: RawRow) {
     throw new Error(`Regla GRD ${grdCode} no encontrada durante el procesamiento.`);
   }
 
-  // ¡MODIFICADO! Aquí guardamos los datos *crudos* del CSV.
-  // El cálculo se hará en la exportación.
-  // ¡CORREGIDO! Se elimina 'new Prisma.Decimal()'
+  // Obtener datos para calcular precioBaseTramo
+  const getColumnValue = (possibleNames: string[]): string | null => {
+    for (const name of possibleNames) {
+      const value = row[name];
+      if (value !== undefined && value !== null && String(value).trim() !== '') {
+        return cleanString(value);
+      }
+    }
+    for (const key in row) {
+      for (const name of possibleNames) {
+        const normalizedKey = key.replace(/\s+/g, ' ').trim();
+        const normalizedName = name.replace(/\s+/g, ' ').trim();
+        if (normalizedKey.toLowerCase() === normalizedName.toLowerCase() || 
+            normalizedKey.toLowerCase().includes(normalizedName.toLowerCase()) ||
+            normalizedName.toLowerCase().includes(normalizedKey.toLowerCase())) {
+          const value = row[key];
+          if (value !== undefined && value !== null && String(value).trim() !== '') {
+            console.log(`🔍 Columna encontrada por coincidencia parcial: "${key}" -> "${name}"`);
+            return cleanString(value);
+          }
+        }
+      }
+    }
+    return null;
+  };
+
+  const convenio = getColumnValue([
+    'Convenios  (cod)',
+    'Convenios (cod)',
+    'Convenios(cod)',
+    'Convenios',
+    'Convenio',
+    'Código Convenio',
+    'Codigo Convenio'
+  ]);
+  
+  const pesoGRD = isNumeric(row['Peso GRD Medio (Todos)'])
+    ? parseFloat(row['Peso GRD Medio (Todos)'])
+    : null;
+  
+  console.log(`📋 Columnas disponibles:`, Object.keys(row));
+  console.log(`🔍 Convenio encontrado: "${convenio}" para episodio ${row['Episodio CMBD']}`);
+  
+  let precioBaseTramoCalculado: number | null = null;
+  if (convenio) {
+    precioBaseTramoCalculado = await obtenerPrecioBaseTramo(convenio, pesoGRD);
+    if (precioBaseTramoCalculado !== null) {
+      console.log(`💰 Precio base calculado: ${precioBaseTramoCalculado} (convenio: ${convenio}, peso: ${pesoGRD})`);
+    } else {
+      console.warn(`⚠️ No se pudo calcular precio base (convenio: ${convenio}, peso: ${pesoGRD})`);
+    }
+  } else {
+    console.warn(`⚠️ Convenio no encontrado. Columnas:`, Object.keys(row).filter(k => k.toLowerCase().includes('conven')));
+  }
+
+  // Crear el episodio con convenio y precioBaseTramo calculados
   await prisma.episodio.create({
     data: {
       centro: cleanString(row['Hospital (Descripción)']),
@@ -207,20 +356,16 @@ async function processRow(row: RawRow) {
       fechaAlta: new Date(row['Fecha Completa']),
       servicioAlta: cleanString(row['Servicio Egreso (Descripción)']),
       
-      // Guardamos los montos y pesos crudos del archivo de entrada
-      // (Usamos parseFloat para manejar decimales)
       montoRn: isNumeric(row['Facturación Total del episodio'])
         ? parseFloat(row['Facturación Total del episodio'])
         : 0,
-      pesoGrd: isNumeric(row['Peso GRD Medio (Todos)']) // Mapea la columna "Peso GRD Medio (Todos)"
-        ? parseFloat(row['Peso GRD Medio (Todos)'])
-        : null,
-        
+      pesoGrd: pesoGRD,
+      convenio: convenio, // Guardar el convenio
+      precioBaseTramo: precioBaseTramoCalculado, // Precio base calculado automáticamente
       inlierOutlier: cleanString(row['IR Alta Inlier / Outlier']),
       
-      // Vinculamos las entidades
       pacienteId: paciente.id,
-      grdId: grdRule.id, // <-- Vinculado, no creado
+      grdId: grdRule.id,
     },
   });
 }
