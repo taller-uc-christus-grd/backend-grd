@@ -12,6 +12,8 @@ import respaldosRoutes from './routes/respaldos.routes';
 import catalogsRoutes from './routes/catalogs.routes';
 import configRoutes from './routes/config.routes';
 import logsRoutes from './routes/logs.routes';
+import preciosConveniosRoutes from './routes/precios-convenios.routes';
+import ajustesTecnologiaRoutes from './routes/ajustes-tecnologia.routes';
 import { errorHandler } from './middlewares/error';
 import { prisma } from './db/client';
 
@@ -120,6 +122,8 @@ app.use('/api', respaldosRoutes);
 app.use('/api', catalogsRoutes); // Rutas de catálogos: /api/catalogs/norma-minsal/import
 app.use('/api/config', configRoutes); // Rutas de configuración: /api/config
 app.use('/api/logs', logsRoutes); // Rutas de logs: /api/logs
+app.use('/api', preciosConveniosRoutes); // Rutas de precios de convenios: /api/precios-convenios
+app.use('/api', ajustesTecnologiaRoutes); // Rutas de ajustes por tecnología: /api/ajustes-tecnologia
 
 // 404 handler
 app.use((req, res) => {

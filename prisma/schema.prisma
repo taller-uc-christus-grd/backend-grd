@@ -7,23 +7,17 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-//
-//  ENTIDADES PRINCIPALES
-//
-
 model Usuario {
-  id           Int      @id @default(autoincrement())
+  id           Int          @id @default(autoincrement())
   nombre       String
-  email        String   @unique
+  email        String       @unique
   passwordHash String
-  rol          String   @db.VarChar(50)
-  activo       Boolean  @default(true)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
-
-  // Relaciones
-  respaldos Respaldo[]   @relation("UsuarioRespaldo")
-  logs      LogSistema[] @relation("UsuarioLog")
+  rol          String       @db.VarChar(50)
+  activo       Boolean      @default(true)
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+  logs         LogSistema[] @relation("UsuarioLog")
+  respaldos    Respaldo[]   @relation("UsuarioRespaldo")
 }
 
 model Paciente {
@@ -32,9 +26,9 @@ model Paciente {
   nombre    String?
   edad      Int?
   sexo      String?    @db.VarChar(10)
-  episodios Episodio[]
   createdAt DateTime   @default(now())
   updatedAt DateTime   @updatedAt
+  episodios Episodio[]
 }
 
 model Grd {
@@ -45,60 +39,82 @@ model Grd {
   precioBaseTramo Decimal?   @db.Decimal(14, 2)
   puntoCorteInf   Decimal?
   puntoCorteSup   Decimal?
-  episodios       Episodio[]
   createdAt       DateTime   @default(now())
+  episodios       Episodio[]
 }
 
 model Episodio {
-  id                  Int       @id @default(autoincrement())
+  id                  Int                   @id @default(autoincrement())
   centro              String?
-  numeroFolio         String?   @db.VarChar(100)
-  episodioCmdb        String?   @db.VarChar(100)
-  idDerivacion        String?   @db.VarChar(100)
+  numeroFolio         String?               @db.VarChar(100)
+  episodioCmdb        String?               @db.VarChar(100)
+  idDerivacion        String?               @db.VarChar(100)
   tipoEpisodio        String?
   fechaIngreso        DateTime?
   fechaAlta           DateTime?
   servicioAlta        String?
   estadoRn            String?
-  validado            Boolean?  // null = Pendiente, true = Aprobado, false = Rechazado
+  validado            Boolean? // null = Pendiente, true = Aprobado, false = Rechazado
   atSn                Boolean?
   atDetalle           String?
-  montoAt             Decimal?  @db.Decimal(14, 2)
+  montoAt             Decimal?              @db.Decimal(14, 2)
   tipoAlta            String?
-  pesoGrd             Decimal?  @db.Decimal(10, 4)
-  montoRn             Decimal?  @db.Decimal(14, 2)
+  pesoGrd             Decimal?              @db.Decimal(10, 4)
+  montoRn             Decimal?              @db.Decimal(14, 2)
   diasDemoraRescate   Int?
-  pagoDemoraRescate   Decimal?  @db.Decimal(14, 2)
-  pagoOutlierSuperior Decimal?  @db.Decimal(14, 2)
+  pagoDemoraRescate   Decimal?              @db.Decimal(14, 2)
+  pagoOutlierSuperior Decimal?              @db.Decimal(14, 2)
   documentacion       Json?
   inlierOutlier       String?
   grupoEnNorma        Boolean?
   diasEstada          Int?
-  precioBaseTramo     Decimal?  @db.Decimal(14, 2)
-  valorGrd            Decimal?  @db.Decimal(14, 2)
-  montoFinal          Decimal?  @db.Decimal(16, 2)
-  facturacionTotal    Decimal?  @db.Decimal(16, 2)
+  precioBaseTramo     Decimal?              @db.Decimal(14, 2)
+  valorGrd            Decimal?              @db.Decimal(14, 2)
+  montoFinal          Decimal?              @db.Decimal(16, 2)
+  facturacionTotal    Decimal?              @db.Decimal(16, 2)
   especialidad        String?
   anio                Int?
   mes                 Int?
-
-  pacienteId Int?
-  paciente   Paciente? @relation(fields: [pacienteId], references: [id])
-
-  grdId Int?
-  grd   Grd? @relation(fields: [grdId], references: [id])
-
-  diagnosticos Diagnostico[]
-  respaldos    Respaldo[]
-  documentos   DocumentoCloudinary[]
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  convenio            String?               @db.VarChar(20) // Código del convenio (ej: 'FNS012', 'FNS026', 'FNS019', 'CH0041')
+  pacienteId          Int?
+  grdId               Int?
+  createdAt           DateTime              @default(now())
+  updatedAt           DateTime              @updatedAt
+  diagnosticos        Diagnostico[]
+  documentos          DocumentoCloudinary[]
+  grd                 Grd?                  @relation(fields: [grdId], references: [id])
+  paciente            Paciente?             @relation(fields: [pacienteId], references: [id])
+  respaldos           Respaldo[]
 
   @@index([numeroFolio])
   @@index([episodioCmdb])
   @@index([pacienteId])
   @@index([fechaIngreso])
+}
+
+model PrecioConvenio {
+  id             String    @id @default(uuid())
+  aseguradora    String?   @default("") // Código de aseguradora (ej: "50000000")
+  nombre_asegi   String?   @default("") // Nombre de la aseguradora (ej: "FONASA")
+  convenio       String?   @default("") // Código del convenio (ej: "CH0041", "FNS012")
+  descr_convenio String?   @default("") // Descripción del convenio (ej: "GRD CARDIOPATIA")
+  tipoAsegurad   String?   @default("") // Tipo de aseguradora (ej: "Pública")
+  tipoConvenio   String?   @default("") // Tipo de convenio (ej: "Público - GRD", "Público - GRD T1")
+  tramo          String? // Tramo (puede ser null o vacío, ej: "T1", "T2", "T3")
+  fechaAdmision  DateTime? // Fecha de admisión (ej: "29-08-2025") - opcional para permitir guardar campo por campo
+  fechaFin       DateTime? // Fecha fin (ej: "31-12-2025") - opcional para permitir guardar campo por campo
+  precio         Float?    @default(0) // Precio del convenio (ej: 84.536, 202.666)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+}
+
+model AjusteTecnologia {
+  id    String  @id @default(uuid())
+  at    String? @default("") // Descripción del AT (ej: "Stent mas dispositivo de liberación")
+  monto Float?  @default(0) // Monto asociado (ej: 51276)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 model Diagnostico {
@@ -107,23 +123,21 @@ model Diagnostico {
   descripcion String?
   esPrincipal Boolean?  @default(false)
   episodioId  Int?
-  episodio    Episodio? @relation(fields: [episodioId], references: [id])
   createdAt   DateTime  @default(now())
+  episodio    Episodio? @relation(fields: [episodioId], references: [id])
 }
 
 model Respaldo {
-  id          Int      @id @default(autoincrement())
+  id          Int       @id @default(autoincrement())
   filename    String?
   storagePath String?
   fileType    String?
   sizeBytes   Int?
-  uploadedAt  DateTime @default(now())
-
-  episodioId Int?
-  episodio   Episodio? @relation(fields: [episodioId], references: [id])
-
-  uploadedBy Int?
-  usuario    Usuario? @relation("UsuarioRespaldo", fields: [uploadedBy], references: [id])
+  uploadedAt  DateTime  @default(now())
+  episodioId  Int?
+  uploadedBy  Int?
+  episodio    Episodio? @relation(fields: [episodioId], references: [id])
+  usuario     Usuario?  @relation("UsuarioRespaldo", fields: [uploadedBy], references: [id])
 }
 
 model LogSistema {
@@ -134,22 +148,20 @@ model LogSistema {
   message   String?
   metadata  Json?
   createdAt DateTime @default(now())
-
-  userId  Int?
-  usuario Usuario? @relation("UsuarioLog", fields: [userId], references: [id])
+  userId    Int?
+  usuario   Usuario? @relation("UsuarioLog", fields: [userId], references: [id])
 
   @@index([userId])
 }
 
 model DocumentoCloudinary {
-  id          Int      @id @default(autoincrement())
-  nombre      String
-  publicId    String   @unique // public_id de Cloudinary
-  url         String   // URL del archivo en Cloudinary
-  formato     String?  // Extensión del archivo (pdf, jpg, etc.)
-  tamano      Int?     // Tamaño en bytes
-  uploadedAt  DateTime @default(now())
-
+  id         Int      @id @default(autoincrement())
+  nombre     String
+  publicId   String   @unique
+  url        String
+  formato    String?
+  tamano     Int?
+  uploadedAt DateTime @default(now())
   episodioId Int
   episodio   Episodio @relation(fields: [episodioId], references: [id], onDelete: Cascade)
 
@@ -157,13 +169,13 @@ model DocumentoCloudinary {
 }
 
 model ConfiguracionSistema {
-  id                Int      @id @default(autoincrement())
-  clave             String   @unique // Clave única de la configuración
-  valor             String   // Valor como string (se puede parsear según el tipo)
-  descripcion       String?
-  tipo              String?  @default("string") // string, number, boolean, json
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
+  id          Int      @id @default(autoincrement())
+  clave       String   @unique
+  valor       String
+  descripcion String?
+  tipo        String?  @default("string")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
   @@index([clave])
 }
