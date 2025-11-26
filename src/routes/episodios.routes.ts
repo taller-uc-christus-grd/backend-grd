@@ -1014,8 +1014,10 @@ const finanzasSchema = Joi.object({
     Joi.number().min(0),
     Joi.string().pattern(/^\d+(\.\d+)?$/).min(0)
   ).optional(),
-  // valorGRD NO es editable - se calcula automáticamente como peso * precioBaseTramo
-  // Se ignora si viene en el request
+  valorGRD: Joi.alternatives().try(       // 👈 NUEVO
+    Joi.number().min(0),
+    Joi.string().pattern(/^\d+(\.\d+)?$/).min(0)
+  ).optional(),
   montoFinal: Joi.alternatives().try(
     Joi.number().min(0),
     Joi.string().pattern(/^\d+(\.\d+)?$/).min(0)
@@ -1024,7 +1026,6 @@ const finanzasSchema = Joi.object({
 }).unknown(false); // No permitir campos desconocidos
 
 // Mapeo completo de campos del frontend a la base de datos para finanzas
-// NOTA: valorGRD NO está en el mapeo porque NO es editable (se calcula automáticamente)
 const finanzasFieldMapping: Record<string, string> = {
   estadoRN: 'estadoRn',
   at: 'atSn',
@@ -1032,7 +1033,7 @@ const finanzasFieldMapping: Record<string, string> = {
   montoRN: 'montoRn',
   pagoDemora: 'pagoDemoraRescate',
   pagoOutlierSup: 'pagoOutlierSuperior',
-  // valorGRD: NO editable, se calcula automáticamente
+  valorGRD: 'valorGrd', // NUEVO: para override manual
 };
 
 // Actualizar episodio parcialmente (PATCH) - Funcionalidad de Finanzas, Gestión y Codificador
@@ -1173,14 +1174,25 @@ router.patch('/episodios/:id',
       validatedValue = value || {};
     }
 
-    // 3. MODIFICACIÓN: Re-inyectar 'validado' (de gestión) DESPUÉS de la validación
+    // 3. MODIFICACIÓN: Re-inyectar 'validado' DESPUÉS de la validación
     if (validadoValue !== undefined) {
-      // Validamos 'validado' manualmente aquí
+      const userRoleUpper = (req.user?.role || '').toUpperCase();
+
+      // Solo FINANZAS puede cambiar el campo "validado"
+      if (userRoleUpper !== 'FINANZAS') {
+        return res.status(403).json({
+          message: 'Solo el rol FINANZAS puede aprobar/rechazar episodios (campo "validado").',
+          error: 'FORBIDDEN',
+          field: 'validado',
+        });
+      }
+
+      // Validar tipo del valor
       if (typeof validadoValue === 'boolean' || validadoValue === null) {
-        validatedValue.validado = validadoValue; // Se añade al objeto de valores válidos
+        validatedValue.validado = validadoValue;
       } else {
         return res.status(400).json({
-          message: 'El campo "validado" debe ser true, false, o null.',
+          message: 'El campo "validado" debe ser true, false o null.',
           error: 'ValidationError',
           field: 'validado',
         });
@@ -1254,9 +1266,6 @@ router.patch('/episodios/:id',
       }
     }
 
-    // IGNORAR montoFinal y valorGRD si vienen en el request (se calcularán automáticamente)
-    delete updateData.montoFinal;
-    delete updateData.valorGrd; // valorGRD NO es editable, siempre se calcula
 
     // Validaciones de reglas de negocio
     // Si at === false (o 'N'), atDetalle debe ser null y montoAT debe ser 0
@@ -1387,6 +1396,8 @@ router.patch('/episodios/:id',
     const montoATActual = episodio.montoAt ? Number(episodio.montoAt) : 0;
     const pagoOutlierSupActual = episodio.pagoOutlierSuperior ? Number(episodio.pagoOutlierSuperior) : 0;
     const pagoDemoraActual = episodio.pagoDemoraRescate ? Number(episodio.pagoDemoraRescate) : 0;
+        // Caso fuera de norma (override manual permitido)
+    const esFueraDeNorma = episodio.grupoEnNorma === false;
 
     // Determinar valores finales (nuevos o actuales)
     // NOTA: pesoGrd NO es editable por finanzas, siempre usar el valor actual
@@ -1428,19 +1439,42 @@ router.patch('/episodios/:id',
     const pagoOutlierSup = updateData.pagoOutlierSuperior !== undefined ? (updateData.pagoOutlierSuperior ?? 0) : pagoOutlierSupActual;
     const pagoDemora = updateData.pagoDemoraRescate !== undefined ? (updateData.pagoDemoraRescate ?? 0) : pagoDemoraActual;
 
-    // PASO 1: SIEMPRE recalcular valorGRD = peso * precioBaseTramo
-    // (ignorar cualquier valor que haya venido en el request)
-    const valorGRDCalculado = calcularValorGRD(peso ?? 0, precioBaseTramoParaCalculo);
-    updateData.valorGrd = valorGRDCalculado;
+    // ¿Hay overrides manuales?
+    const tieneOverrideValorGRD = esFueraDeNorma && updateData.valorGrd !== undefined && updateData.valorGrd !== null;
+    const tieneOverrideMontoFinal = esFueraDeNorma && updateData.montoFinal !== undefined && updateData.montoFinal !== null;
 
-    // PASO 2: Calcular montoFinal usando el valorGRD calculado
-    const montoFinalCalculado = calcularMontoFinal(
-      valorGRDCalculado,
-      montoAT,
-      pagoOutlierSup,
-      pagoDemora
-    );
-    updateData.montoFinal = montoFinalCalculado;
+    // PASO 1: valorGRD
+    let valorGRDFinal: number;
+    if (tieneOverrideValorGRD) {
+      // Si FINANZAS manda valorGRD en caso fuera de norma, lo respetamos
+      const v = typeof updateData.valorGrd === 'string'
+        ? parseFloat(updateData.valorGrd)
+        : Number(updateData.valorGrd);
+      valorGRDFinal = !isNaN(v) && isFinite(v) ? v : 0;
+    } else {
+      // Caso normal: lo calculamos
+      valorGRDFinal = calcularValorGRD(peso ?? 0, precioBaseTramoParaCalculo);
+    }
+    updateData.valorGrd = valorGRDFinal;
+
+    // PASO 2: montoFinal
+    let montoFinalFinal: number;
+    if (tieneOverrideMontoFinal) {
+      // Si FINANZAS manda montoFinal en fuera de norma, lo respetamos
+      const m = typeof updateData.montoFinal === 'string'
+        ? parseFloat(updateData.montoFinal)
+        : Number(updateData.montoFinal);
+      montoFinalFinal = !isNaN(m) && isFinite(m) ? m : 0;
+    } else {
+      // Caso normal: lo calculamos
+      montoFinalFinal = calcularMontoFinal(
+        valorGRDFinal,
+        montoAT,
+        pagoOutlierSup,
+        pagoDemora
+      );
+    }
+    updateData.montoFinal = montoFinalFinal;
 
     // Actualizar el episodio
     const updated = await prisma.episodio.update({
