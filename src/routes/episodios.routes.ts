@@ -993,9 +993,23 @@ const codificadorSchema = Joi.object({
   ).optional(),
 }).unknown(false); // No permitir campos desconocidos
 
+// Esquema de validación específico para campos de gestión (PATCH)
+// Gestión puede editar 'at', 'atDetalle', 'precioBaseTramo'
+const gestionSchema = Joi.object({
+  at: Joi.alternatives().try(
+    Joi.boolean(),
+    Joi.string().valid('S', 's', 'N', 'n')
+  ).optional(),
+  atDetalle: Joi.string().allow(null, '').optional(),
+  precioBaseTramo: Joi.alternatives().try(
+    Joi.number().min(0),
+    Joi.string().pattern(/^\d+(\.\d+)?$/).min(0)
+  ).optional(),
+}).unknown(false); // No permitir campos desconocidos
+
 // Esquema de validación específico para campos de finanzas (PATCH)
 // Validamos con nombres del frontend, luego mapeamos a nombres de BD
-// NOTA: 'at' y 'atDetalle' NO están permitidos para finanzas/gestion
+// NOTA: 'at' y 'atDetalle' NO están permitidos para finanzas
 const finanzasSchema = Joi.object({
   estadoRN: Joi.string().valid('Aprobado', 'Pendiente', 'Rechazado').allow(null, '').optional(),
   montoAT: Joi.alternatives().try(
@@ -1086,21 +1100,22 @@ router.patch('/episodios/:id',
       payloadCompleto: requestBody
     });
     
-    // CASO 1: Si está intentando editar 'at' o 'atDetalle' directamente, SOLO codificador puede hacerlo
+    // CASO 1: Si está intentando editar 'at' o 'atDetalle' directamente, permitir codificador y gestion
     // ⚠️ IMPORTANTE: Incluso si montoAT viene junto, es parte de la autocompletación/limpieza automática
     if (camposEditablesEnPayload.length > 0) {
-      if (userRoleUpper !== 'CODIFICADOR') {
+      const rolesPermitidosParaAT = ['CODIFICADOR', 'GESTION'];
+      if (!rolesPermitidosParaAT.includes(userRoleUpper)) {
         return res.status(403).json({
-          message: `Acceso denegado: Solo el rol codificador puede editar los campos AT(S/N) y AT Detalle. Rol actual: "${userRole}".`,
+          message: `Acceso denegado: Solo los roles codificador y gestion pueden editar los campos AT(S/N) y AT Detalle. Rol actual: "${userRole}".`,
           error: 'FORBIDDEN',
           campos: camposEditablesEnPayload,
           rolActual: userRole,
           camposRequeridos: ['at', 'atDetalle']
         });
       }
-      // Si el rol es CODIFICADOR y está editando at o atDetalle, permitir
+      // Si el rol es CODIFICADOR o GESTION y está editando at o atDetalle, permitir
       // Incluso si montoAT viene en el payload, es aceptable porque se autocompleta
-      console.log('✅ Permiso concedido para codificador editando:', camposEditablesEnPayload);
+      console.log(' Permiso concedido para', userRole, 'editando:', camposEditablesEnPayload);
     }
     
     // CASO 1.5: Si está intentando editar valorGRD o montoFinal (override manual), permitir finanzas y codificador
@@ -1130,7 +1145,7 @@ router.patch('/episodios/:id',
           campos: otrosCampos
         });
       }
-      console.log('✅ Permiso concedido para', userRole, 'editando:', otrosCampos);
+      console.log(' Permiso concedido para', userRole, 'editando:', otrosCampos);
     }
     
     // CASO ESPECIAL: Si el payload solo contiene montoAT sin at ni atDetalle
@@ -1143,7 +1158,7 @@ router.patch('/episodios/:id',
       });
     }
     
-    console.log('✅ Permisos verificados correctamente. Procediendo con actualización...');
+    console.log(' Permisos verificados correctamente. Procediendo con actualización...');
 
     // 2. MODIFICACIÓN: "Rescatar" el campo 'validado' (de gestión) ANTES de la validación
     const validadoValue = requestBody.validado;
@@ -1160,15 +1175,19 @@ router.patch('/episodios/:id',
         // Codificador puede editar 'at', 'atDetalle', y para casos fuera de norma: 'valorGRD' y 'montoFinal'
         schema = codificadorSchema;
         errorMessagePrefix = 'Error de validación (codificador)';
+      } else if (userRole.toLowerCase() === 'gestion') {
+        // Gestión puede editar 'at', 'atDetalle', y 'precioBaseTramo'
+        schema = gestionSchema;
+        errorMessagePrefix = 'Error de validación (gestión)';
       } else {
-        // Finanzas y Gestión usan el esquema de finanzas (sin 'at' y 'atDetalle')
+        // Finanzas usa el esquema de finanzas (sin 'at' y 'atDetalle')
         schema = finanzasSchema;
-        errorMessagePrefix = 'Error de validación (finanzas/gestión)';
+        errorMessagePrefix = 'Error de validación (finanzas)';
         
-        // Verificar que no intente editar 'at' o 'atDetalle' (ya validado arriba, pero por seguridad)
+        // Verificar que Finanzas no intente editar 'at' o 'atDetalle'
         if ('at' in requestBody || 'atDetalle' in requestBody) {
           return res.status(403).json({
-            message: 'Acceso denegado: Solo el rol codificador puede editar los campos AT(S/N) y AT Detalle.',
+            message: 'Acceso denegado: Solo los roles codificador y gestion pueden editar los campos AT(S/N) y AT Detalle.',
             error: 'FORBIDDEN',
             campos: ['at', 'atDetalle'].filter(c => c in requestBody),
             rolActual: userRole
