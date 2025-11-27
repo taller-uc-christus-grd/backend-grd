@@ -94,6 +94,9 @@ function calcularMontoFinal(
 
 // Función para normalizar datos de episodio antes de enviar al frontend
 function normalizeEpisodeResponse(episode: any): any {
+  // Log temporal para verificar que se está ejecutando
+  const episodioId = episode.episodioCmdb || episode.id;
+  console.log(`📝 [normalizeEpisodeResponse] Procesando episodio ${episodioId}, inlierOutlier="${episode.inlierOutlier}"`);
   // Normalizar campo 'at': SIEMPRE devolver "S" o "N" (string)
   let atValue: string;
   if (episode.atSn === true || episode.atSn === 'S' || episode.atSn === 's') {
@@ -171,7 +174,7 @@ function normalizeEpisodeResponse(episode: any): any {
     pagoDemora
   );
 
-  return {
+  const result = {
     episodio: episode.episodioCmdb || '',
     rut: episode.paciente?.rut || '',
     nombre: episode.paciente?.nombre || '',
@@ -199,8 +202,62 @@ function normalizeEpisodeResponse(episode: any): any {
     // Campos de solo lectura
     grdCodigo: episode.grd?.codigo || '',
     peso: toNumber(episode.pesoGrd), // SIEMPRE number o null
+    // Calcular primero inlierOutlier normalizado
     inlierOutlier: episode.inlierOutlier || '',
-    grupoDentroNorma: episode.grupoEnNorma || false,
+    // Calcular "Grupo dentro de norma S/N" basado en "Inlier/Outlier": true si es "Inlier", false en cualquier otro caso
+    grupoDentroNorma: (() => {
+      // Usar el valor original del episodio, no el normalizado
+      const inlierValue = episode.inlierOutlier;
+      
+      // Log para TODOS los episodios temporalmente para debug
+      const episodioId = episode.episodioCmdb || episode.id;
+      console.log(`🔍 [grupoDentroNorma] episodio=${episodioId}, inlierValue="${inlierValue}", tipo=${typeof inlierValue}`);
+      
+      if (!inlierValue) {
+        console.log(`   → Retornando false (valor vacío/null)`);
+        return false;
+      }
+      
+      // Convertir a string y normalizar: trim, lowercase, y normalizar espacios
+      const normalized = String(inlierValue).trim().toLowerCase().replace(/\s+/g, ' ');
+      // Comparar exactamente con "inlier"
+      const isInlier = normalized === 'inlier';
+      
+      console.log(`   → normalized="${normalized}", isInlier=${isInlier}, retornando ${isInlier}`);
+      
+      return isInlier;
+    })(),
+    // Calcular "En norma" basado en "Inlier/Outlier": "Si" si es "Inlier", "No" en cualquier otro caso
+    // Si "Inlier/Outlier" está vacío, "En norma" también debe estar vacío (null)
+    enNorma: (() => {
+      const inlierValue = episode.inlierOutlier;
+      
+      // Si no hay valor o está vacío, devolver null (vacío)
+      if (!inlierValue) {
+        return null;
+      }
+      
+      // Convertir a string si no lo es (por si viene como otro tipo)
+      const stringValue = typeof inlierValue === 'string' 
+        ? inlierValue 
+        : String(inlierValue);
+      
+      // Normalizar: trim y lowercase
+      const normalized = stringValue.trim().toLowerCase();
+      
+      // Si está vacío después de trim o es "-", devolver null (vacío)
+      if (normalized === '' || normalized === '-') {
+        return null;
+      }
+      
+      // Comparar exactamente con "inlier" (case-insensitive)
+      if (normalized === 'inlier') {
+        return 'Si';
+      }
+      
+      // Cualquier otro caso (outlier superior, inferior, etc.) es "No"
+      return 'No';
+    })(),
     diasEstada: toInteger(episode.diasEstada), // SIEMPRE integer o null
     
     // Otros campos del episodio
@@ -211,6 +268,14 @@ function normalizeEpisodeResponse(episode: any): any {
     convenio: episode.convenio || '', // Misma lógica que tipoEpisodio
     id: episode.id,
   };
+  
+  // Log para verificar que enNorma está en el resultado (solo primeros 5 para no saturar)
+  const episodioIdLog = episode.episodioCmdb || episode.id;
+  if (episodioIdLog && String(episodioIdLog).slice(-1) <= '5') {
+    console.log(`✅ [normalizeEpisodeResponse] episodio=${episodioIdLog}, enNorma="${result.enNorma}", tipo=${typeof result.enNorma}, tieneEnNorma=${'enNorma' in result}`);
+  }
+  
+  return result;
 }
 
 // Esquema Joi para validación (lo mantenemos)
@@ -433,6 +498,7 @@ router.get('/episodios/final', requireAuth, async (req: Request, res: Response) 
         montoFinal: normalized.montoFinal,
         documentacion: normalized.documentacion,
         grupoDentroNorma: normalized.grupoDentroNorma,
+        enNorma: normalized.enNorma || null, // Si está vacío, mantener null (no forzar 'No')
         diasEstada: normalized.diasEstada,
         id: normalized.id,
       };
@@ -737,7 +803,15 @@ router.get('/episodios/:id', requireAuth, async (req: Request, res: Response) =>
       where: { episodioCmdb: id },
       include: {
         paciente: true,
-        grd: true,
+        grd: {
+          select: {
+            id: true,
+            codigo: true,
+            descripcion: true,
+            puntoCorteInf: true,
+            puntoCorteSup: true,
+          },
+        },
         diagnosticos: true,
         respaldos: true,
       },
@@ -749,7 +823,15 @@ router.get('/episodios/:id', requireAuth, async (req: Request, res: Response) =>
         where: { id: idNum },
         include: {
           paciente: true,
-          grd: true,
+          grd: {
+            select: {
+              id: true,
+              codigo: true,
+              descripcion: true,
+              puntoCorteInf: true,
+              puntoCorteSup: true,
+            },
+          },
           diagnosticos: true,
           respaldos: true,
         },
@@ -1147,7 +1229,15 @@ router.patch('/episodios/:id',
         where: { id: idNum },
         include: {
           paciente: true,
-          grd: true,
+          grd: {
+            select: {
+              id: true,
+              codigo: true,
+              descripcion: true,
+              puntoCorteInf: true,
+              puntoCorteSup: true,
+            },
+          },
           diagnosticos: true,
           respaldos: true,
         },
@@ -1160,7 +1250,15 @@ router.patch('/episodios/:id',
         where: { episodioCmdb: id },
         include: {
           paciente: true,
-          grd: true,
+          grd: {
+            select: {
+              id: true,
+              codigo: true,
+              descripcion: true,
+              puntoCorteInf: true,
+              puntoCorteSup: true,
+            },
+          },
           diagnosticos: true,
           respaldos: true,
         },
@@ -1216,6 +1314,7 @@ router.patch('/episodios/:id',
       pagoDemora
     );
     updateData.montoFinal = montoFinalCalculado;
+
 
     // Actualizar el episodio
     const updated = await prisma.episodio.update({
@@ -1788,6 +1887,9 @@ router.post('/episodios/import', requireAuth, upload.single('file'), async (req:
           });
         }
         
+        // Usar normalizeEpisodeResponse para calcular inlierOutlier y otros campos calculados
+        const normalized = normalizeEpisodeResponse(e);
+        
         // Construir el objeto mapeado asegurando que convenio siempre esté presente
         const mapped: any = {
           episodio: e.episodioCmdb || '',
@@ -1803,9 +1905,10 @@ router.post('/episodios/import', requireAuth, upload.single('file'), async (req:
           fechaAlta: e.fechaAlta ? e.fechaAlta.toISOString().split('T')[0] : '', // <-- ANTES DECÍA [MAIN]
           servicioAlta: e.servicioAlta || '',
           grdCodigo: e.grd?.codigo || '',
-          peso: toNumber(e.pesoGd),
+          peso: toNumber(e.pesoGrd),
           montoRN: toNumber(e.montoRn),
-          inlierOutlier: e.inlierOutlier || '',
+          inlierOutlier: normalized.inlierOutlier, // Campo calculado automáticamente: "Outlier Superior" o "Inlier"
+          enNorma: normalized.enNorma || null, // Campo calculado: "Si" si es Inlier, "No" si es Outlier, null si inlierOutlier está vacío
           id: e.id, // Incluir ID para poder editar después
         };
         
