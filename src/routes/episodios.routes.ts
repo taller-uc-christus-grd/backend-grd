@@ -976,13 +976,21 @@ router.put('/episodios/:id', requireAuth, async (req: Request, res: Response) =>
 });
 
 // Esquema de validación específico para campos de codificador (PATCH)
-// Solo permite editar 'at' y 'atDetalle'
+// Permite editar 'at', 'atDetalle', y para casos fuera de norma: 'valorGRD' y 'montoFinal'
 const codificadorSchema = Joi.object({
   at: Joi.alternatives().try(
     Joi.boolean(),
     Joi.string().valid('S', 's', 'N', 'n')
   ).optional(),
   atDetalle: Joi.string().allow(null, '').optional(),
+  valorGRD: Joi.alternatives().try(
+    Joi.number().min(0),
+    Joi.string().pattern(/^\d+(\.\d+)?$/).min(0)
+  ).optional(),
+  montoFinal: Joi.alternatives().try(
+    Joi.number().min(0),
+    Joi.string().pattern(/^\d+(\.\d+)?$/).min(0)
+  ).optional(),
 }).unknown(false); // No permitir campos desconocidos
 
 // Esquema de validación específico para campos de finanzas (PATCH)
@@ -1058,15 +1066,21 @@ router.patch('/episodios/:id',
     // IMPORTANTE: montoAT siempre viene junto con at o atDetalle, pero NO se considera un campo editable
     // Es solo una consecuencia automática de editar at o atDetalle
     const camposATEditables = ['at', 'atDetalle'];
+    const camposOverrideManual = ['valorGRD', 'montoFinal']; // Campos para override manual en casos fuera de norma
     const camposEditablesEnPayload = camposATEditables.filter(campo => campo in requestBody);
+    const camposOverrideEnPayload = camposOverrideManual.filter(campo => campo in requestBody);
     const otrosCampos = Object.keys(requestBody).filter(
-      campo => !camposATEditables.includes(campo) && campo !== 'montoAT' && campo !== 'validado' && campo !== 'valorGRD'
+      campo => !camposATEditables.includes(campo) && 
+               !camposOverrideManual.includes(campo) && 
+               campo !== 'montoAT' && 
+               campo !== 'validado'
     );
     const userRoleUpper = userRole.toUpperCase();
     
     console.log('🔐 Verificando permisos para PATCH /api/episodios/:id:', {
       rol: userRole,
       camposATEditables: camposEditablesEnPayload,
+      camposOverride: camposOverrideEnPayload,
       otrosCampos: otrosCampos,
       montoATEnPayload: 'montoAT' in requestBody,
       payloadCompleto: requestBody
@@ -1089,7 +1103,23 @@ router.patch('/episodios/:id',
       console.log('✅ Permiso concedido para codificador editando:', camposEditablesEnPayload);
     }
     
-    // CASO 2: Si está intentando editar otros campos (pero NO at ni atDetalle), permitir finanzas y gestion
+    // CASO 1.5: Si está intentando editar valorGRD o montoFinal (override manual), permitir finanzas y codificador
+    // Estos campos solo son editables para casos fuera de norma (se valida más adelante)
+    if (camposOverrideEnPayload.length > 0) {
+      const rolesPermitidosParaOverride = ['FINANZAS', 'CODIFICADOR'];
+      if (!rolesPermitidosParaOverride.includes(userRoleUpper)) {
+        return res.status(403).json({
+          message: `Acceso denegado: Solo los roles finanzas y codificador pueden hacer override manual de valorGRD y montoFinal. Rol actual: "${userRole}".`,
+          error: 'FORBIDDEN',
+          campos: camposOverrideEnPayload,
+          rolActual: userRole,
+          camposRequeridos: ['valorGRD', 'montoFinal']
+        });
+      }
+      console.log('✅ Permiso concedido para', userRole, 'editando override manual:', camposOverrideEnPayload);
+    }
+    
+    // CASO 2: Si está intentando editar otros campos (pero NO at ni atDetalle ni override), permitir finanzas y gestion
     if (otrosCampos.length > 0) {
       const rolesPermitidosParaOtros = ['FINANZAS', 'GESTION'];
       if (!rolesPermitidosParaOtros.includes(userRoleUpper)) {
@@ -1127,7 +1157,7 @@ router.patch('/episodios/:id',
       let errorMessagePrefix = '';
       
       if (userRole.toLowerCase() === 'codificador') {
-        // Codificador solo puede editar 'at' y 'atDetalle'
+        // Codificador puede editar 'at', 'atDetalle', y para casos fuera de norma: 'valorGRD' y 'montoFinal'
         schema = codificadorSchema;
         errorMessagePrefix = 'Error de validación (codificador)';
       } else {
