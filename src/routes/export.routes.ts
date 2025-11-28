@@ -131,7 +131,7 @@ router.get('/export', requireAuth, async (req: Request, res: Response) => {
     });
 
     const headers = [
-      'Tipo dato', 'VALIDADO', 'Centro', 'N° Folio', 'Episodio', 'Rut Paciente', 'Nombre Paciente',
+      'Tipo dato', 'VALIDADO', 'Centro', 'N° Folio', 'Episodio', 'Rut Paciente', 'Nombre Paciente', 'Convenio',
       'TIPO EPISODIO', 'Fecha de ingreso', 'Fecha Alta', 'Servicios de alta', 'ESTADO RN', 'AT (S/N)',
       'AT detalle', 'Monto AT', 'Tipo de Alta', 'IR - GRD', 'PESO', 'MONTO RN', 'Dias de demora rescate desde Hospital',
       'Pago demora rescate', 'Pago por outlier superior', 'DOCUMENTACIÓN NECESARIA', 'Inlier/outlier',
@@ -148,6 +148,7 @@ router.get('/export', requireAuth, async (req: Request, res: Response) => {
         row.episodioCmdb || '',
         row.paciente.rut || '',
         row.paciente.nombre || '',
+        row.convenio || '', // Convenio bajo el cual se calcula el episodio
         row.tipoEpisodio || '',
         toExcelDate(row.fechaIngreso),
         toExcelDate(row.fechaAlta),

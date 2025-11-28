@@ -132,6 +132,11 @@ router.post('/catalogs/norma-minsal/import', requireAuth, (req: Request, res: Re
     next();
   });
 }, asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+  console.log('\n\n🎯 ========== INICIO IMPORTACIÓN NORMA MINSAL ==========');
+  console.log(`📁 Archivo recibido: ${req.file?.originalname || 'NO HAY ARCHIVO'}`);
+  console.log(`📏 Tamaño: ${req.file?.size || 0} bytes`);
+  console.log('==================================================\n');
+  
   const errorRecords: any[] = [];
   const successRecords: any[] = [];
 
@@ -151,10 +156,10 @@ router.post('/catalogs/norma-minsal/import', requireAuth, (req: Request, res: Re
     const replace = req.body.replace === 'true';
 
     if (replace) {
-      console.log('REEMPLAZANDO DATOS: Eliminando normas anteriores...');
-      // Opcional: eliminar todos los GRDs antes de importar
-      // Esto es peligroso si hay episodios vinculados, así que lo comentamos por defecto
-      // await prisma.grd.deleteMany({});
+      console.log('REEMPLAZANDO DATOS: Actualizando normas anteriores...');
+      // No eliminamos los GRDs porque pueden tener episodios vinculados
+      // En su lugar, el upsert actualizará los campos (puntoCorteSup, puntoCorteInf, peso, etc.)
+      // Esto asegura que los GRDs existentes se actualicen con los nuevos valores de la norma
     }
 
     const fileBuffer = req.file.buffer;
@@ -196,12 +201,32 @@ router.post('/catalogs/norma-minsal/import', requireAuth, (req: Request, res: Re
       return res.status(400).json({ error: 'El archivo está vacío o no contiene datos válidos' });
     }
 
-    console.log(`Procesando ${data.length} registros de Norma Minsal...`);
+    console.log(`\n${'='.repeat(80)}`);
+    console.log(`🚀 INICIANDO IMPORTACIÓN DE NORMA MINSAL - ${data.length} registros`);
+    console.log(`${'='.repeat(80)}\n`);
     
     // Log de las primeras filas para debugging
     if (data.length > 0) {
       console.log('📋 Primera fila de ejemplo:', JSON.stringify(data[0], null, 2));
       console.log('📋 Claves de la primera fila:', Object.keys(data[0]));
+      
+      // Buscar específicamente las columnas de puntos de corte
+      const primeraFila = data[0];
+      const todasLasKeys = Object.keys(primeraFila);
+      const columnasPuntoCorte = todasLasKeys.filter(k => 
+        k.toLowerCase().includes('punto') && k.toLowerCase().includes('corte')
+      );
+      console.log('\n🔍 Columnas relacionadas con "Punto Corte":', columnasPuntoCorte);
+      columnasPuntoCorte.forEach(col => {
+        console.log(`   "${col}" = "${primeraFila[col]}" (tipo: ${typeof primeraFila[col]})`);
+      });
+      
+      // Buscar también variaciones
+      const todasLasColumnas = todasLasKeys.map(k => ({ nombre: k, valor: primeraFila[k] }));
+      console.log('\n📊 Todas las columnas de la primera fila:');
+      todasLasColumnas.slice(0, 20).forEach(col => {
+        console.log(`   "${col.nombre}" = "${col.valor}"`);
+      });
     }
 
     // Procesar cada fila
@@ -260,39 +285,111 @@ router.post('/catalogs/norma-minsal/import', requireAuth, (req: Request, res: Re
 
       // Función auxiliar para buscar columnas de forma flexible
       const getColumnValue = (possibleNames: string[]): string | undefined => {
+        // Primero buscar coincidencia exacta
         for (const name of possibleNames) {
           const value = row[name];
           if (value !== undefined && value !== null && value !== '') {
+            if (index < 3) {
+              console.log(`   ✅ Encontrada columna exacta "${name}" = "${value}"`);
+            }
             return String(value);
           }
         }
-        // Buscar por nombre parcial (case-insensitive)
+        // Buscar por nombre parcial (case-insensitive y sin espacios extra)
         for (const key in row) {
+          const keyNormalized = key.trim().toLowerCase().replace(/\s+/g, ' ');
           for (const name of possibleNames) {
-            if (key.toLowerCase().includes(name.toLowerCase())) {
+            const nameNormalized = name.trim().toLowerCase().replace(/\s+/g, ' ');
+            // Buscar coincidencia exacta normalizada o parcial
+            if (keyNormalized === nameNormalized || keyNormalized.includes(nameNormalized) || nameNormalized.includes(keyNormalized)) {
               const value = row[key];
               if (value !== undefined && value !== null && value !== '') {
+                if (index < 3) {
+                  console.log(`   ✅ Encontrada columna por coincidencia parcial "${key}" = "${value}" (buscando: "${name}")`);
+                }
                 return String(value);
               }
             }
           }
+        }
+        if (index < 3) {
+          console.log(`   ❌ No se encontró ninguna columna para: ${possibleNames.join(', ')}`);
         }
         return undefined;
       };
 
       // Parsear valores numéricos usando la función auxiliar
       const peso = parseDecimal(getColumnValue(['Peso Total', 'Peso', 'PESO TOTAL', 'PESO']));
-      const pci = parseDecimal(getColumnValue(['Punto Corte Inferior', 'Punto Corte Inf', 'PCI', 'Punto Corte Inferior (días)']));
-      const pcs = parseDecimal(getColumnValue(['Punto Corte Superior', 'Punto Corte Sup', 'PCS', 'Punto Corte Superior (días)']));
+      
+      // Buscar punto de corte inferior - incluir variaciones con y sin espacios
+      const pci = parseDecimal(getColumnValue([
+        'Punto Corte Inferior',
+        'Punto Corte Inf', 
+        'PCI', 
+        'Punto Corte Inferior (días)',
+        'Punto Corte Inferior ',
+        ' Punto Corte Inferior',
+        'PUNTO CORTE INFERIOR',
+        'Punto corte inferior'
+      ]));
+      
+      // Buscar punto de corte superior - incluir variaciones con y sin espacios
+      const pcs = parseDecimal(getColumnValue([
+        'Punto Corte Superior',
+        'Punto Corte Sup', 
+        'PCS', 
+        'Punto Corte Superior (días)',
+        'Punto Corte Superior ',
+        ' Punto Corte Superior',
+        'PUNTO CORTE SUPERIOR',
+        'Punto corte superior'
+      ]));
+      
+      // Log para los primeros 5 registros para verificar que se están encontrando los valores
+      if (index < 5) {
+        console.log(`📊 Procesando fila ${index + 1} - GRD: ${codigo}`, {
+          peso,
+          pci,
+          pcs,
+          tienePeso: peso > 0,
+          tienePCI: pci > 0 || pci !== 0,
+          tienePCS: pcs > 0 || pcs !== 0,
+          rowKeys: Object.keys(row).slice(0, 10), // Primeras 10 columnas para debug
+        });
+      }
 
-      // Validar que los valores numéricos sean válidos (al menos uno debe ser mayor a 0)
+      // Validar que los valores numéricos sean válidos
+      // IMPORTANTE: pci y pcs pueden ser 0, pero deben existir para poder calcular
       if (peso === 0 && pci === 0 && pcs === 0) {
+        // Log detallado para los primeros errores
+        if (index < 5) {
+          console.log(`⚠️ Fila ${index + 1} - Todos los valores son cero:`, {
+            peso,
+            pci,
+            pcs,
+            codigo,
+            rowKeys: Object.keys(row).slice(0, 15),
+          });
+        }
         errorRecords.push({
           fila: index + 1,
           error: 'Todos los valores numéricos son cero o inválidos',
           registro: row,
         });
         continue;
+      }
+      
+      // Validar específicamente que los puntos de corte existan (pueden ser 0 pero deben estar definidos)
+      if (pci === 0 && pcs === 0) {
+        // Log detallado para los primeros errores
+        if (index < 5) {
+          console.log(`⚠️ Fila ${index + 1} - Puntos de corte son cero:`, {
+            pci,
+            pcs,
+            codigo,
+            peso,
+          });
+        }
       }
 
       // Calcular precio base (similar al script loadNorma.ts)
@@ -310,11 +407,29 @@ router.post('/catalogs/norma-minsal/import', requireAuth, (req: Request, res: Re
       };
 
       try {
-        await prisma.grd.upsert({
+        const grdActualizado = await prisma.grd.upsert({
           where: { codigo: codigo },
           update: dataToUpsert,
           create: dataToUpsert,
         });
+
+        // Verificar que los valores se guardaron correctamente
+        const grdVerificado = await prisma.grd.findUnique({
+          where: { codigo: codigo },
+          select: { codigo: true, puntoCorteInf: true, puntoCorteSup: true, peso: true },
+        });
+
+        // Log para los primeros 5 GRDs para verificar que se guardaron
+        if (index < 5) {
+          console.log(`✅ GRD ${codigo} guardado/actualizado:`, {
+            codigo: grdVerificado?.codigo,
+            puntoCorteInf: grdVerificado?.puntoCorteInf,
+            puntoCorteSup: grdVerificado?.puntoCorteSup,
+            peso: grdVerificado?.peso,
+            tipoPuntoCorteInf: typeof grdVerificado?.puntoCorteInf,
+            tipoPuntoCorteSup: typeof grdVerificado?.puntoCorteSup,
+          });
+        }
 
         successRecords.push({
           fila: index + 1,
@@ -355,7 +470,34 @@ router.post('/catalogs/norma-minsal/import', requireAuth, (req: Request, res: Re
       errorDetails: errorRecords.slice(0, 50),
     };
 
-    console.log(`✅ Importación completada: ${successRecords.length} exitosos, ${errorRecords.length} errores`);
+    console.log(`\n${'='.repeat(80)}`);
+    console.log(`✅ IMPORTACIÓN COMPLETADA: ${successRecords.length} exitosos, ${errorRecords.length} errores`);
+    console.log(`${'='.repeat(80)}\n`);
+    
+    // Verificar que los valores se guardaron correctamente - verificar algunos GRDs aleatorios
+    if (successRecords.length > 0) {
+      const primeros5 = successRecords.slice(0, 5);
+      console.log('🔍 Verificando que los valores se guardaron correctamente...\n');
+      for (const record of primeros5) {
+        const grdVerificado = await prisma.grd.findUnique({
+          where: { codigo: record.codigo },
+          select: { codigo: true, puntoCorteInf: true, puntoCorteSup: true, peso: true },
+        });
+        if (grdVerificado) {
+          console.log(`✅ GRD ${record.codigo} verificado en BD:`, {
+            puntoCorteInf: grdVerificado.puntoCorteInf,
+            puntoCorteSup: grdVerificado.puntoCorteSup,
+            peso: grdVerificado.peso,
+            tipoPuntoCorteInf: typeof grdVerificado.puntoCorteInf,
+            tipoPuntoCorteSup: typeof grdVerificado.puntoCorteSup,
+          });
+        } else {
+          console.error(`❌ GRD ${record.codigo} NO encontrado en BD después de guardar!`);
+        }
+      }
+      console.log('\n');
+    }
+    
     return res.status(200).json(response);
   } catch (error: any) {
     console.error('❌ Error al importar Norma Minsal:', error);

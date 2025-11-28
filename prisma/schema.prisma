@@ -75,7 +75,7 @@ model Episodio {
   especialidad        String?
   anio                Int?
   mes                 Int?
-  convenio            String?               @db.VarChar(20) // Código del convenio (ej: 'FNS012', 'FNS026', 'FNS019', 'CH0041')
+  convenio            String?   @db.VarChar(100) // Convenio bajo el cual se calcula el episodio
   pacienteId          Int?
   grdId               Int?
   createdAt           DateTime              @default(now())

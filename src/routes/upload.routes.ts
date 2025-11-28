@@ -98,6 +98,94 @@ function cleanString(value?: any): string | null {
   return out === '' ? null : out;
 }
 
+// Helper para buscar columna "Convenio" de manera flexible
+// Prioriza "Convenios (cod)" sobre "Convenios (des)" cuando hay múltiples columnas
+function findConvenioValue(row: RawRow): string | null {
+  // PRIMERA PRIORIDAD: Buscar específicamente columnas con "(cod)" que tengan valor
+  // Esto asegura que encontremos "Convenios (cod)" antes que "Convenios (des)"
+  const todasLasKeys = Object.keys(row);
+  
+  // Buscar primero columnas que contengan "(cod)" y tengan valor
+  for (const key of todasLasKeys) {
+    if (key) {
+      const normalized = key.toLowerCase().trim().replace(/\s+/g, ' ');
+      // Priorizar columnas que contengan "(cod)"
+      if (normalized.includes('convenio') && (normalized.includes('(cod)') || normalized.includes(' cod'))) {
+        const value = cleanString(row[key]);
+        if (value) {
+          console.log(`✅ Encontrado Convenio (prioridad cod) en columna "${key}": "${value}"`);
+          return value;
+        }
+      }
+    }
+  }
+  
+  // SEGUNDA PRIORIDAD: Buscar por nombres exactos que contengan "(cod)"
+  const nombresExactosConCod = [
+    'Convenios (cod)',
+    'Convenios  (cod)', // Con dos espacios
+    'Convenios(cod)',
+    'CONVENIOS (COD)',
+    'convenios (cod)',
+    'Convenio (cod)',
+    'Convenio(cod)',
+  ];
+  
+  for (const nombreExacto of nombresExactosConCod) {
+    if (nombreExacto in row) {
+      const value = cleanString(row[nombreExacto]);
+      if (value) {
+        console.log(`✅ Encontrado Convenio (exacto con cod) en columna "${nombreExacto}": "${value}"`);
+        return value;
+      }
+    }
+  }
+  
+  // TERCERA PRIORIDAD: Buscar otras variaciones de convenio (sin "(cod)" específico)
+  for (const key of todasLasKeys) {
+    if (key) {
+      const normalized = key.toLowerCase().trim().replace(/\s+/g, ' ');
+      if (normalized.includes('convenio') && !normalized.includes('(des)') && !normalized.includes(' des')) {
+        const value = cleanString(row[key]);
+        if (value) {
+          console.log(`✅ Encontrado Convenio (flexible) en columna "${key}": "${value}"`);
+          return value;
+        }
+      }
+    }
+  }
+  
+  // CUARTA PRIORIDAD: Buscar nombres exactos sin "(cod)"
+  const nombresExactosSinCod = [
+    'Convenio',
+    'Convenios',
+    'CONVENIO',
+    'CONVENIOS'
+  ];
+  
+  for (const nombreExacto of nombresExactosSinCod) {
+    if (nombreExacto in row) {
+      const value = cleanString(row[nombreExacto]);
+      if (value) {
+        console.log(`✅ Encontrado Convenio (exacto sin cod) en columna "${nombreExacto}": "${value}"`);
+        return value;
+      }
+    }
+  }
+  
+  // Log solo si realmente no se encontró nada
+  if (todasLasKeys.length > 0) {
+    const columnasConvenio = todasLasKeys.filter(k => k.toLowerCase().includes('convenio'));
+    if (columnasConvenio.length > 0) {
+      console.log(`⚠️ No se encontró columna Convenio con valor. Columnas relacionadas encontradas: ${columnasConvenio.join(', ')}`);
+      columnasConvenio.forEach(col => {
+        console.log(`   "${col}" = "${row[col]}" (vacío: ${!cleanString(row[col])})`);
+      });
+    }
+  }
+  return null;
+}
+
 /**
  * Calcula el tramo basado en el peso GRD para convenios con sistema de tramos (FNS012, FNS026)
  */
@@ -367,7 +455,9 @@ async function processRow(row: RawRow) {
   const pagoOutlierSuperior = isNumeric(row['Pago Outlier Superior']) ? parseFloat(row['Pago Outlier Superior']) : 0;
 
   // Crear el episodio con convenio y precioBaseTramo calculados
-  await prisma.episodio.create({
+  
+  
+    await prisma.episodio.create({
     data: {
       centro: cleanString(row['Hospital (Descripción)']),
       numeroFolio: cleanString(row['ID Derivación']),
@@ -376,29 +466,35 @@ async function processRow(row: RawRow) {
       fechaIngreso: new Date(row['Fecha Ingreso completa']),
       fechaAlta: new Date(row['Fecha Completa']),
       servicioAlta: cleanString(row['Servicio Egreso (Descripción)']),
-      
+
       montoRn: isNumeric(row['Facturación Total del episodio'])
         ? parseFloat(row['Facturación Total del episodio'])
         : 0,
+
       pesoGrd: pesoGRD,
-      convenio: convenio,
+      // convenio nunca null: si no se encontró, string vacía
+      convenio: convenio || '',
       precioBaseTramo: precioBaseTramoCalculado,
       inlierOutlier: cleanString(row['IR Alta Inlier / Outlier']),
-      
+
       // ✅ NUEVOS CAMPOS CON DEFAULTS PARA CAMPOS EN BLANCO
       estadoRn: estadoRN,
-      atSn: atSn,
-      atDetalle: atDetalle,
-      montoAt: montoAt,
-      diasDemoraRescate: diasDemoraRescate,
-      pagoDemoraRescate: pagoDemoraRescate,
-      pagoOutlierSuperior: pagoOutlierSuperior,
-      
+      atSn,
+      atDetalle,
+      montoAt,
+      diasDemoraRescate,
+      pagoDemoraRescate,
+      pagoOutlierSuperior,
+
       pacienteId: paciente.id,
       grdId: grdRule.id,
     },
   });
-}
+
+  console.log(
+    `✅ [UPLOAD] Episodio creado: ${cleanString(row['Episodio CMBD'])}, convenio: "${convenio || ''}"`
+  );
+  
 
 // --- Endpoint de Carga (AHORA GUARDA EN DB) ---
 router.post('/upload', requireAuth, upload.single('file'), async (req: Request, res: Response) => {
