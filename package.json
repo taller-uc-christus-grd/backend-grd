@@ -4,7 +4,7 @@
   "description": "Backend para sistema GRD de UC Christus (exportación e importación de datos)",
   "main": "dist/index.js",
   "scripts": {
-    "dev": "nodemon --watch src --exec ts-node src/index.ts",
+    "dev": "nodemon",
     "build": "npx prisma generate && npx tsc",
     "build:prod": "npx prisma generate && npx tsc",
     "start": "node dist/index.js",
@@ -14,7 +14,9 @@
     "prisma:migrate": "npx prisma migrate dev --name init",
     "prisma:migrate:deploy": "npx prisma migrate deploy",
     "prisma:generate": "npx prisma generate",
-    "seed": "ts-node prisma/seed.ts"
+    "seed": "ts-node prisma/seed.ts",
+    "kill:port": "lsof -ti:${PORT:-3000} | xargs kill -9 2>/dev/null || echo 'Puerto ${PORT:-3000} está libre'",
+    "clean:port": "lsof -ti:${PORT:-3000} | xargs kill -9 2>/dev/null || echo 'Puerto ${PORT:-3000} está libre'"
   },
   "keywords": [
     "grd",
@@ -41,7 +43,6 @@
     "node": ">=16.0.0"
   },
   "dependencies": {
-    "@prisma/client": "^6.18.0",
     "bcryptjs": "^3.0.2",
     "cloudinary": "^2.8.0",
     "cors": "^2.8.5",
@@ -58,6 +59,7 @@
   },
   "devDependencies": {
     "@faker-js/faker": "^10.1.0",
+    "@prisma/client": "^6.19.0",
     "@types/bcryptjs": "^2.4.6",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.3",

@@ -1,0 +1,4 @@
+-- AlterTable
+--ALTER TABLE "Episodio" ADD COLUMN     "validado" BOOLEAN;
+-- Esta migración ya está aplicada en la BD real.
+-- Se deja en blanco para que el shadow database no falle.

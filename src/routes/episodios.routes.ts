@@ -92,6 +92,139 @@ function calcularMontoFinal(
   return vGRD + mAT + pOutlier + pDemora;
 }
 
+/**
+ * Calcula el tramo basado en el peso GRD para convenios con sistema de tramos (FNS012, FNS026)
+ * @param pesoGRD Peso GRD del episodio
+ * @returns 'T1', 'T2', 'T3' o null si no se puede determinar
+ */
+function calcularTramo(pesoGRD: number | null | undefined): 'T1' | 'T2' | 'T3' | null {
+  if (pesoGRD === null || pesoGRD === undefined) {
+    return null; // No se puede determinar el tramo sin peso
+  }
+  
+  if (pesoGRD >= 0 && pesoGRD <= 1.5) {
+    return 'T1';
+  } else if (pesoGRD > 1.5 && pesoGRD <= 2.5) {
+    return 'T2';
+  } else if (pesoGRD > 2.5) {
+    return 'T3';
+  }
+  
+  return null; // Peso negativo (no debería ocurrir)
+}
+
+/**
+ * Obtiene el precio base por tramo basándose en el convenio y el peso GRD
+ * @param convenio Código del convenio (FNS012, FNS026, FNS019, CH0041)
+ * @param pesoGRD Peso GRD del episodio
+ * @returns Precio base calculado o null si no se puede determinar
+ */
+async function obtenerPrecioBaseTramo(
+  convenio: string | null | undefined,
+  pesoGRD: number | null | undefined
+): Promise<number | null> {
+  // Validar que el convenio esté presente
+  if (!convenio || typeof convenio !== 'string' || convenio.trim() === '') {
+    if (process.env.NODE_ENV === 'development') {
+      console.warn('⚠️ obtenerPrecioBaseTramo: Convenio no proporcionado o inválido');
+    }
+    return null;
+  }
+
+  const convenioNormalizado = convenio.trim().toUpperCase();
+  
+  // Determinar si el convenio usa tramos o precio único
+  const conveniosConTramos = ['FNS012', 'FNS026'];
+  const conveniosPrecioUnico = ['FNS019', 'CH0041'];
+  
+  if (conveniosConTramos.includes(convenioNormalizado)) {
+    // Calcular tramo basado en peso GRD
+    const tramo = calcularTramo(pesoGRD);
+    if (!tramo) {
+      if (process.env.NODE_ENV === 'development') {
+        console.warn(`⚠️ obtenerPrecioBaseTramo: No se pudo determinar el tramo para convenio ${convenioNormalizado} con peso GRD ${pesoGRD}`);
+      }
+      return null; // No se puede determinar el tramo
+    }
+    
+    // Buscar en precios_convenios (sin validar fechas)
+    const precioRegistro = await prisma.precioConvenio.findFirst({
+      where: {
+        convenio: convenioNormalizado,
+        tramo: tramo
+      },
+      orderBy: {
+        createdAt: 'desc' // Si hay múltiples, tomar el más reciente
+      }
+    });
+    
+    if (!precioRegistro || precioRegistro.precio === null || precioRegistro.precio === undefined) {
+      if (process.env.NODE_ENV === 'development') {
+        console.warn(`⚠️ obtenerPrecioBaseTramo: No se encontró precio para convenio ${convenioNormalizado} y tramo ${tramo}`);
+      }
+      return null;
+    }
+    
+    const precio = typeof precioRegistro.precio === 'number' 
+      ? precioRegistro.precio 
+      : parseFloat(String(precioRegistro.precio));
+    
+    if (isNaN(precio) || !isFinite(precio)) {
+      if (process.env.NODE_ENV === 'development') {
+        console.warn(`⚠️ obtenerPrecioBaseTramo: Precio inválido para convenio ${convenioNormalizado} y tramo ${tramo}: ${precioRegistro.precio}`);
+      }
+      return null;
+    }
+    
+    if (process.env.NODE_ENV === 'development') {
+      console.log(`✅ obtenerPrecioBaseTramo: Precio encontrado para ${convenioNormalizado} ${tramo}: ${precio}`);
+    }
+    
+    return precio;
+    
+  } else if (conveniosPrecioUnico.includes(convenioNormalizado)) {
+    // Buscar precio único (ignorar tramo y fechas)
+    const precioRegistro = await prisma.precioConvenio.findFirst({
+      where: {
+        convenio: convenioNormalizado
+      },
+      orderBy: {
+        createdAt: 'desc' // Si hay múltiples, tomar el más reciente
+      }
+    });
+    
+    if (!precioRegistro || precioRegistro.precio === null || precioRegistro.precio === undefined) {
+      if (process.env.NODE_ENV === 'development') {
+        console.warn(`⚠️ obtenerPrecioBaseTramo: No se encontró precio para convenio ${convenioNormalizado}`);
+      }
+      return null;
+    }
+    
+    const precio = typeof precioRegistro.precio === 'number' 
+      ? precioRegistro.precio 
+      : parseFloat(String(precioRegistro.precio));
+    
+    if (isNaN(precio) || !isFinite(precio)) {
+      if (process.env.NODE_ENV === 'development') {
+        console.warn(`⚠️ obtenerPrecioBaseTramo: Precio inválido para convenio ${convenioNormalizado}: ${precioRegistro.precio}`);
+      }
+      return null;
+    }
+    
+    if (process.env.NODE_ENV === 'development') {
+      console.log(`✅ obtenerPrecioBaseTramo: Precio encontrado para ${convenioNormalizado}: ${precio}`);
+    }
+    
+    return precio;
+  }
+  
+  // Si el convenio no está en ninguna de las listas, retornar null
+  if (process.env.NODE_ENV === 'development') {
+    console.warn(`⚠️ obtenerPrecioBaseTramo: Convenio desconocido: ${convenioNormalizado}`);
+  }
+  return null;
+}
+
 // Función para normalizar datos de episodio antes de enviar al frontend
 function normalizeEpisodeResponse(episode: any): any {
   // Log temporal para verificar que se está ejecutando
@@ -140,8 +273,12 @@ function normalizeEpisodeResponse(episode: any): any {
 
   // Normalizar atDetalle: siempre string o null (nunca undefined o "")
   let atDetalle: string | null = null;
-  if (episode.atDetalle && typeof episode.atDetalle === 'string' && episode.atDetalle.trim() !== '') {
-    atDetalle = episode.atDetalle;
+  if (episode.atDetalle !== null && episode.atDetalle !== undefined) {
+    if (typeof episode.atDetalle === 'string' && episode.atDetalle.trim() !== '') {
+      atDetalle = episode.atDetalle;
+    }
+    // Si es null explícitamente, mantenerlo como null
+    // Si es undefined, mantenerlo como null (no undefined)
   }
 
   // Normalizar documentacion
@@ -201,8 +338,8 @@ function normalizeEpisodeResponse(episode: any): any {
     
     // Campos de solo lectura
     grdCodigo: episode.grd?.codigo || '',
-    peso: toNumber(episode.pesoGrd), // SIEMPRE number o null
-    // Calcular primero inlierOutlier normalizado
+    peso: toNumber(episode.pesoGrd), // SIEMPRE number o null (para compatibilidad)
+    pesoGrd: toNumber(episode.pesoGrd), // SIEMPRE number o null (nuevo campo "Peso GRD Medio (Todos)")
     inlierOutlier: episode.inlierOutlier || '',
     // Calcular "Grupo dentro de norma S/N" basado en "Inlier/Outlier": true si es "Inlier", false en cualquier otro caso
     grupoDentroNorma: (() => {
@@ -317,7 +454,7 @@ const episodioSchema = Joi.object({
   especialidad: Joi.string().optional().allow(null),
   anio: Joi.number().integer().optional().allow(null),
   mes: Joi.number().integer().optional().allow(null),
-  convenio: Joi.string().optional().allow(null),
+  convenio: Joi.string().optional().allow(null), // Código del convenio (ej: 'FNS012', 'FNS026', 'FNS019', 'CH0041')
   pacienteId: Joi.number().integer().optional().allow(null),
   grdId: Joi.number().integer().optional().allow(null),
 });
@@ -439,6 +576,23 @@ router.get('/episodios/final', requireAuth, async (req: Request, res: Response) 
       prisma.episodio.count({ where }),
     ]);
 
+    // Recalcular precioBaseTramo para episodios que lo necesiten (lazy calculation)
+    for (const episode of episodes) {
+      if (!episode.precioBaseTramo && episode.convenio) {
+        const pesoGRD = episode.pesoGrd ? Number(episode.pesoGrd) : null;
+        const precioCalculado = await obtenerPrecioBaseTramo(episode.convenio, pesoGRD);
+        if (precioCalculado !== null) {
+          // Actualizar en la base de datos para evitar recalcular en cada consulta
+          await prisma.episodio.update({
+            where: { id: episode.id },
+            data: { precioBaseTramo: precioCalculado }
+          });
+          // Actualizar el objeto en memoria para esta respuesta
+          episode.precioBaseTramo = precioCalculado as any;
+        }
+      }
+    }
+
     // Helper para convertir Decimal a Number
     const toNumber = (value: any): number => {
       if (value === null || value === undefined) return 0;
@@ -468,7 +622,25 @@ router.get('/episodios/final', requireAuth, async (req: Request, res: Response) 
       }
       
       // El endpoint /final tiene un formato ligeramente diferente, ajustar campos
-      return {
+      // IMPORTANTE: Asegurar que atDetalle siempre esté presente (null o string, nunca undefined)
+      // Si es undefined, establecerlo explícitamente como null para que se incluya en el JSON
+      const atDetalleValue = (normalized.atDetalle !== undefined && normalized.atDetalle !== null) 
+        ? normalized.atDetalle 
+        : null;
+      
+      // DEBUG: Verificar que atDetalle está presente
+      if (process.env.NODE_ENV === 'development') {
+        console.log(`🔍 GET /episodios/final - Episodio ${e.episodioCmdb || e.id}:`, {
+          atDetalleEnBD: e.atDetalle,
+          atDetalleNormalizado: normalized.atDetalle,
+          atDetalleValue: atDetalleValue,
+          tipo: typeof normalized.atDetalle,
+          keysEnNormalized: Object.keys(normalized).filter(k => k.includes('at'))
+        });
+      }
+      
+      // Construir el objeto de respuesta explícitamente para asegurar que atDetalle esté presente
+      const itemResponse: any = {
         episodio: normalized.episodio,
         nombre: normalized.nombre,
         rut: normalized.rut,
@@ -487,7 +659,7 @@ router.get('/episodios/final', requireAuth, async (req: Request, res: Response) 
         validado: normalized.validado,
         estadoRN: normalized.estadoRN,
         at: normalized.at,
-        atDetalle: normalized.atDetalle,
+        atDetalle: atDetalleValue, // ⚠️ CRÍTICO: Incluir atDetalle en la respuesta (siempre null o string, nunca undefined)
         montoAT: normalized.montoAT,
         motivoEgreso: normalized.tipoAlta || null, // Mapeo de tipoAlta a motivoEgreso para el frontend
         diasDemoraRescate: normalized.diasDemoraRescate,
@@ -502,6 +674,14 @@ router.get('/episodios/final', requireAuth, async (req: Request, res: Response) 
         diasEstada: normalized.diasEstada,
         id: normalized.id,
       };
+      
+      // VERIFICACIÓN FINAL: Asegurar que atDetalle esté presente en el objeto
+      if (!('atDetalle' in itemResponse)) {
+        itemResponse.atDetalle = null;
+        console.warn(`⚠️ atDetalle no estaba presente en itemResponse para episodio ${e.episodioCmdb || e.id}. Agregado como null.`);
+      }
+      
+      return itemResponse;
     });
 
     // Log para verificar la respuesta final que se envía al frontend
@@ -842,6 +1022,25 @@ router.get('/episodios/:id', requireAuth, async (req: Request, res: Response) =>
       return res.status(404).json({ error: 'Episodio no encontrado' });
     }
     
+    // Recalcular precioBaseTramo si es necesario (lazy calculation)
+    if (!episodio.precioBaseTramo && episodio.convenio) {
+      const pesoGRD = episodio.pesoGrd ? Number(episodio.pesoGrd) : null;
+      const precioCalculado = await obtenerPrecioBaseTramo(episodio.convenio, pesoGRD);
+      if (precioCalculado !== null) {
+        // Actualizar en la base de datos
+        episodio = await prisma.episodio.update({
+          where: { id: episodio.id },
+          data: { precioBaseTramo: precioCalculado },
+          include: {
+            paciente: true,
+            grd: true,
+            diagnosticos: true,
+            respaldos: true,
+          },
+        });
+      }
+    }
+    
     // Normalizar respuesta antes de enviar
     const normalized = normalizeEpisodeResponse(episodio);
     res.json(normalized);
@@ -940,16 +1139,43 @@ router.put('/episodios/:id', requireAuth, async (req: Request, res: Response) =>
   }
 });
 
-// Esquema de validación específico para campos de finanzas (PATCH)
-// Validamos con nombres del frontend, luego mapeamos a nombres de BD
-// Acepta 'at' como boolean O string ("S"/"N") para retrocompatibilidad
-const finanzasSchema = Joi.object({
-  estadoRN: Joi.string().valid('Aprobado', 'Pendiente', 'Rechazado').allow(null, '').optional(),
+// Esquema de validación específico para campos de codificador (PATCH)
+// Permite editar 'at', 'atDetalle', y para casos fuera de norma: 'valorGRD' y 'montoFinal'
+const codificadorSchema = Joi.object({
   at: Joi.alternatives().try(
     Joi.boolean(),
     Joi.string().valid('S', 's', 'N', 'n')
   ).optional(),
   atDetalle: Joi.string().allow(null, '').optional(),
+  valorGRD: Joi.alternatives().try(
+    Joi.number().min(0),
+    Joi.string().pattern(/^\d+(\.\d+)?$/).min(0)
+  ).optional(),
+  montoFinal: Joi.alternatives().try(
+    Joi.number().min(0),
+    Joi.string().pattern(/^\d+(\.\d+)?$/).min(0)
+  ).optional(),
+}).unknown(false); // No permitir campos desconocidos
+
+// Esquema de validación específico para campos de gestión (PATCH)
+// Gestión puede editar 'at', 'atDetalle', 'precioBaseTramo'
+const gestionSchema = Joi.object({
+  at: Joi.alternatives().try(
+    Joi.boolean(),
+    Joi.string().valid('S', 's', 'N', 'n')
+  ).optional(),
+  atDetalle: Joi.string().allow(null, '').optional(),
+  precioBaseTramo: Joi.alternatives().try(
+    Joi.number().min(0),
+    Joi.string().pattern(/^\d+(\.\d+)?$/).min(0)
+  ).optional(),
+}).unknown(false); // No permitir campos desconocidos
+
+// Esquema de validación específico para campos de finanzas (PATCH)
+// Validamos con nombres del frontend, luego mapeamos a nombres de BD
+// NOTA: 'at' y 'atDetalle' NO están permitidos para finanzas
+const finanzasSchema = Joi.object({
+  estadoRN: Joi.string().valid('Aprobado', 'Pendiente', 'Rechazado').allow(null, '').optional(),
   montoAT: Joi.alternatives().try(
     Joi.number().min(0),
     Joi.string().pattern(/^\d+(\.\d+)?$/).min(0)
@@ -974,8 +1200,10 @@ const finanzasSchema = Joi.object({
     Joi.number().min(0),
     Joi.string().pattern(/^\d+(\.\d+)?$/).min(0)
   ).optional(),
-  // valorGRD NO es editable - se calcula automáticamente como peso * precioBaseTramo
-  // Se ignora si viene en el request
+  valorGRD: Joi.alternatives().try(       // 👈 NUEVO
+    Joi.number().min(0),
+    Joi.string().pattern(/^\d+(\.\d+)?$/).min(0)
+  ).optional(),
   montoFinal: Joi.alternatives().try(
     Joi.number().min(0),
     Joi.string().pattern(/^\d+(\.\d+)?$/).min(0)
@@ -984,7 +1212,6 @@ const finanzasSchema = Joi.object({
 }).unknown(false); // No permitir campos desconocidos
 
 // Mapeo completo de campos del frontend a la base de datos para finanzas
-// NOTA: valorGRD NO está en el mapeo porque NO es editable (se calcula automáticamente)
 const finanzasFieldMapping: Record<string, string> = {
   estadoRN: 'estadoRn',
   at: 'atSn',
@@ -992,17 +1219,22 @@ const finanzasFieldMapping: Record<string, string> = {
   montoRN: 'montoRn',
   pagoDemora: 'pagoDemoraRescate',
   pagoOutlierSup: 'pagoOutlierSuperior',
-  // valorGRD: NO editable, se calcula automáticamente
+  valorGRD: 'valorGrd', // NUEVO: para override manual
 };
 
 // Actualizar episodio parcialmente (PATCH) - Funcionalidad de Finanzas, Gestión y Codificador
 router.patch('/episodios/:id', 
   requireAuth, 
-  // Permitir a 'gestion', 'finanzas' y 'codificador'
+  // Permitir a finanzas, gestion y codificador
   requireRole(['finanzas', 'FINANZAS', 'gestion', 'GESTION', 'codificador', 'CODIFICADOR']), 
   async (req: Request, res: Response) => {
+  // DEBUG: Verificar que el código se está ejecutando
+  console.log('🔍 PATCH /episodios/:id - Código actualizado con codificador - VERSIÓN 2.0');
+  console.log('🔍 Roles permitidos en requireRole:', ['finanzas', 'FINANZAS', 'gestion', 'GESTION', 'codificador', 'CODIFICADOR']);
   try {
     const { id } = req.params;
+    const userRole = req.user?.role || '';
+    console.log('🔍 Rol del usuario recibido:', userRole);
     
     // Obtener rol del usuario y normalizarlo
     const userRole = req.user?.role || '';
@@ -1029,6 +1261,90 @@ router.patch('/episodios/:id',
     // Ignorar valorGRD si viene en el request (se calculará automáticamente)
     const requestBody = { ...req.body };
     delete requestBody.valorGRD;
+    
+    // Verificar qué campos se están intentando actualizar
+    // IMPORTANTE: montoAT siempre viene junto con at o atDetalle, pero NO se considera un campo editable
+    // Es solo una consecuencia automática de editar at o atDetalle
+    const camposATEditables = ['at', 'atDetalle'];
+    const camposOverrideManual = ['valorGRD', 'montoFinal']; // Campos para override manual en casos fuera de norma
+    const camposEditablesEnPayload = camposATEditables.filter(campo => campo in requestBody);
+    const camposOverrideEnPayload = camposOverrideManual.filter(campo => campo in requestBody);
+    const otrosCampos = Object.keys(requestBody).filter(
+      campo => !camposATEditables.includes(campo) && 
+               !camposOverrideManual.includes(campo) && 
+               campo !== 'montoAT' && 
+               campo !== 'validado'
+    );
+    const userRoleUpper = userRole.toUpperCase();
+    
+    console.log('🔐 Verificando permisos para PATCH /api/episodios/:id:', {
+      rol: userRole,
+      camposATEditables: camposEditablesEnPayload,
+      camposOverride: camposOverrideEnPayload,
+      otrosCampos: otrosCampos,
+      montoATEnPayload: 'montoAT' in requestBody,
+      payloadCompleto: requestBody
+    });
+    
+    // CASO 1: Si está intentando editar 'at' o 'atDetalle' directamente, permitir codificador y gestion
+    // ⚠️ IMPORTANTE: Incluso si montoAT viene junto, es parte de la autocompletación/limpieza automática
+    if (camposEditablesEnPayload.length > 0) {
+      const rolesPermitidosParaAT = ['CODIFICADOR', 'GESTION'];
+      if (!rolesPermitidosParaAT.includes(userRoleUpper)) {
+        return res.status(403).json({
+          message: `Acceso denegado: Solo los roles codificador y gestion pueden editar los campos AT(S/N) y AT Detalle. Rol actual: "${userRole}".`,
+          error: 'FORBIDDEN',
+          campos: camposEditablesEnPayload,
+          rolActual: userRole,
+          camposRequeridos: ['at', 'atDetalle']
+        });
+      }
+      // Si el rol es CODIFICADOR o GESTION y está editando at o atDetalle, permitir
+      // Incluso si montoAT viene en el payload, es aceptable porque se autocompleta
+      console.log(' Permiso concedido para', userRole, 'editando:', camposEditablesEnPayload);
+    }
+    
+    // CASO 1.5: Si está intentando editar valorGRD o montoFinal (override manual), permitir finanzas y codificador
+    // Estos campos solo son editables para casos fuera de norma (se valida más adelante)
+    if (camposOverrideEnPayload.length > 0) {
+      const rolesPermitidosParaOverride = ['FINANZAS', 'CODIFICADOR'];
+      if (!rolesPermitidosParaOverride.includes(userRoleUpper)) {
+        return res.status(403).json({
+          message: `Acceso denegado: Solo los roles finanzas y codificador pueden hacer override manual de valorGRD y montoFinal. Rol actual: "${userRole}".`,
+          error: 'FORBIDDEN',
+          campos: camposOverrideEnPayload,
+          rolActual: userRole,
+          camposRequeridos: ['valorGRD', 'montoFinal']
+        });
+      }
+      console.log('✅ Permiso concedido para', userRole, 'editando override manual:', camposOverrideEnPayload);
+    }
+    
+    // CASO 2: Si está intentando editar otros campos (pero NO at ni atDetalle ni override), permitir finanzas y gestion
+    if (otrosCampos.length > 0) {
+      const rolesPermitidosParaOtros = ['FINANZAS', 'GESTION'];
+      if (!rolesPermitidosParaOtros.includes(userRoleUpper)) {
+        return res.status(403).json({
+          message: `Acceso denegado: Rol del usuario "${userRole}" no está permitido para editar estos campos.`,
+          error: 'FORBIDDEN',
+          rolActual: userRole,
+          campos: otrosCampos
+        });
+      }
+      console.log(' Permiso concedido para', userRole, 'editando:', otrosCampos);
+    }
+    
+    // CASO ESPECIAL: Si el payload solo contiene montoAT sin at ni atDetalle
+    // Esto no debería pasar desde el frontend, pero por seguridad rechazar
+    if ('montoAT' in requestBody && camposEditablesEnPayload.length === 0 && otrosCampos.length === 0) {
+      return res.status(403).json({
+        message: 'Acceso denegado: El campo montoAT no puede editarse directamente. Solo se autocompleta al editar AT Detalle.',
+        error: 'FORBIDDEN',
+        rolActual: userRole
+      });
+    }
+    
+    console.log(' Permisos verificados correctamente. Procediendo con actualización...');
 
     // Validar permisos según campos
     // Campo AT (S/N) solo puede ser editado por codificador
@@ -1078,15 +1394,41 @@ router.patch('/episodios/:id',
 
     // 2. MODIFICACIÓN: "Rescatar" el campo 'validado' (de gestión) ANTES de la validación
     const validadoValue = requestBody.validado;
-    // Lo quitamos temporalmente para que 'finanzasSchema' no lo elimine con stripUnknown
+    // Lo quitamos temporalmente para que los esquemas no lo eliminen con stripUnknown
     delete requestBody.validado; 
 
-    // Validar campos según esquema de finanzas (con nombres del frontend)
-    // Solo validar si hay campos de finanzas (no solo validado)
+    // Validar campos según el rol del usuario
     let validatedValue: any = {};
     if (Object.keys(requestBody).length > 0) {
-      const { error, value } = finanzasSchema.validate(requestBody, {
-        stripUnknown: true, // Esto limpia SOLO los campos que no son de finanzas
+      let schema;
+      let errorMessagePrefix = '';
+      
+      if (userRole.toLowerCase() === 'codificador') {
+        // Codificador puede editar 'at', 'atDetalle', y para casos fuera de norma: 'valorGRD' y 'montoFinal'
+        schema = codificadorSchema;
+        errorMessagePrefix = 'Error de validación (codificador)';
+      } else if (userRole.toLowerCase() === 'gestion') {
+        // Gestión puede editar 'at', 'atDetalle', y 'precioBaseTramo'
+        schema = gestionSchema;
+        errorMessagePrefix = 'Error de validación (gestión)';
+      } else {
+        // Finanzas usa el esquema de finanzas (sin 'at' y 'atDetalle')
+        schema = finanzasSchema;
+        errorMessagePrefix = 'Error de validación (finanzas)';
+        
+        // Verificar que Finanzas no intente editar 'at' o 'atDetalle'
+        if ('at' in requestBody || 'atDetalle' in requestBody) {
+          return res.status(403).json({
+            message: 'Acceso denegado: Solo los roles codificador y gestion pueden editar los campos AT(S/N) y AT Detalle.',
+            error: 'FORBIDDEN',
+            campos: ['at', 'atDetalle'].filter(c => c in requestBody),
+            rolActual: userRole
+          });
+        }
+      }
+      
+      const { error, value } = schema.validate(requestBody, {
+        stripUnknown: true,
         abortEarly: false,
         presence: 'optional',
       });
@@ -1113,14 +1455,25 @@ router.patch('/episodios/:id',
       validatedValue = value || {};
     }
 
-    // 3. MODIFICACIÓN: Re-inyectar 'validado' (de gestión) DESPUÉS de la validación
+    // 3. MODIFICACIÓN: Re-inyectar 'validado' DESPUÉS de la validación
     if (validadoValue !== undefined) {
-      // Validamos 'validado' manualmente aquí
+      const userRoleUpper = (req.user?.role || '').toUpperCase();
+
+      // Solo FINANZAS puede cambiar el campo "validado"
+      if (userRoleUpper !== 'FINANZAS') {
+        return res.status(403).json({
+          message: 'Solo el rol FINANZAS puede aprobar/rechazar episodios (campo "validado").',
+          error: 'FORBIDDEN',
+          field: 'validado',
+        });
+      }
+
+      // Validar tipo del valor
       if (typeof validadoValue === 'boolean' || validadoValue === null) {
-        validatedValue.validado = validadoValue; // Se añade al objeto de valores válidos
+        validatedValue.validado = validadoValue;
       } else {
         return res.status(400).json({
-          message: 'El campo "validado" debe ser true, false, o null.',
+          message: 'El campo "validado" debe ser true, false o null.',
           error: 'ValidationError',
           field: 'validado',
         });
@@ -1139,6 +1492,12 @@ router.patch('/episodios/:id',
 
     // Mapear campos del frontend a nombres de la base de datos
     const updateData: any = {};
+    
+    // Mapeo común para campos compartidos (at, atDetalle)
+    const commonFieldMapping: Record<string, string> = {
+      at: 'atSn',
+    };
+    
     for (const [key, value] of Object.entries(validatedValue)) {
       
       // 5. MODIFICACIÓN: Añadir 'validado' al mapeo
@@ -1147,7 +1506,8 @@ router.patch('/episodios/:id',
         continue; // Saltar el resto del loop para esta clave
       }
 
-      const dbKey = finanzasFieldMapping[key] || key;
+      // Usar mapeo común o mapeo de finanzas según corresponda
+      const dbKey = commonFieldMapping[key] || finanzasFieldMapping[key] || key;
       
       // Normalizar campos antes de guardar
       if (dbKey === 'atSn') {
@@ -1187,14 +1547,55 @@ router.patch('/episodios/:id',
       }
     }
 
-    // IGNORAR montoFinal y valorGRD si vienen en el request (se calcularán automáticamente)
-    delete updateData.montoFinal;
-    delete updateData.valorGrd; // valorGRD NO es editable, siempre se calcula
 
     // Validaciones de reglas de negocio
-    // Si at === false, atDetalle debe ser null
-    if (updateData.atSn === false && updateData.atDetalle !== undefined) {
+    // Si at === false (o 'N'), atDetalle debe ser null y montoAT debe ser 0
+    // IMPORTANTE: Cuando at = 'N', siempre limpiar atDetalle y montoAT, incluso si vienen en el payload
+    if (updateData.atSn === false) {
       updateData.atDetalle = null;
+      updateData.montoAt = 0;
+      console.log('🧹 Limpiando atDetalle y montoAT porque AT = N');
+    }
+
+    // Validación y autocompletado de montoAT cuando se actualiza atDetalle
+    // IMPORTANTE: El frontend NO envía montoAT cuando guarda atDetalle - solo envía atDetalle
+    // El backend DEBE autocompletar montoAT automáticamente consultando ajustes_tecnologia
+    let ajusteTecnologiaEncontrado: any = null;
+    
+    if (updateData.atDetalle !== undefined) {
+      const atDetalle = updateData.atDetalle;
+      
+      if (atDetalle && typeof atDetalle === 'string' && atDetalle.trim() !== '') {
+        // Buscar el ajuste de tecnología correspondiente (una sola búsqueda)
+        ajusteTecnologiaEncontrado = await prisma.ajusteTecnologia.findFirst({
+          where: {
+            at: atDetalle.trim(),
+          },
+        });
+
+        // Validación: verificar que atDetalle exista en ajustes_tecnologia.at
+        if (!ajusteTecnologiaEncontrado) {
+          return res.status(400).json({
+            error: 'ValidationError',
+            message: `El valor de atDetalle "${atDetalle}" no existe en la tabla de ajustes de tecnología`,
+          });
+        }
+        
+        // Autocompletar montoAT automáticamente si se encontró el ajuste y tiene monto válido
+        if (ajusteTecnologiaEncontrado.monto !== null && ajusteTecnologiaEncontrado.monto !== undefined) {
+          // SIEMPRE autocompletar montoAT (el frontend no lo envía cuando guarda atDetalle)
+          updateData.montoAt = ajusteTecnologiaEncontrado.monto;
+          console.log(`💰 Autocompletado montoAT: ${ajusteTecnologiaEncontrado.monto} para atDetalle: "${atDetalle}"`);
+        } else {
+          // Si el ajuste existe pero el monto es null/undefined, establecer montoAT a 0
+          updateData.montoAt = 0;
+          console.warn(`⚠️ Ajuste encontrado pero monto es null para atDetalle: "${atDetalle}". Estableciendo montoAT a 0.`);
+        }
+      } else {
+        // Si atDetalle es null o vacío, establecer montoAT a 0
+        updateData.montoAt = 0;
+        console.log(`🧹 atDetalle es null/vacío. Estableciendo montoAT a 0.`);
+      }
     }
 
     // Manejar documentacion: Prisma espera Json (objeto/array), no string
@@ -1286,34 +1687,91 @@ router.patch('/episodios/:id',
     }
 
     // Obtener valores actuales del episodio
-    const pesoActual = episodio.pesoGrd ? Number(episodio.pesoGrd) : 0;
-    const precioBaseTramoActual = episodio.precioBaseTramo ? Number(episodio.precioBaseTramo) : 0;
+    const pesoActual = episodio.pesoGrd ? Number(episodio.pesoGrd) : null;
+    const precioBaseTramoActual = episodio.precioBaseTramo ? Number(episodio.precioBaseTramo) : null;
+    const convenioActual = episodio.convenio;
     const montoATActual = episodio.montoAt ? Number(episodio.montoAt) : 0;
     const pagoOutlierSupActual = episodio.pagoOutlierSuperior ? Number(episodio.pagoOutlierSuperior) : 0;
     const pagoDemoraActual = episodio.pagoDemoraRescate ? Number(episodio.pagoDemoraRescate) : 0;
+        // Caso fuera de norma (override manual permitido)
+    const esFueraDeNorma = episodio.grupoEnNorma === false;
 
-    // Usar valores nuevos si vienen en el request, sino usar los actuales
-    // Si viene null explícitamente, usar 0 para el cálculo (pero guardar null en BD)
+    // Determinar valores finales (nuevos o actuales)
     // NOTA: pesoGrd NO es editable por finanzas, siempre usar el valor actual
     const peso = pesoActual;
-    const precioBaseTramo = updateData.precioBaseTramo !== undefined ? (updateData.precioBaseTramo ?? 0) : precioBaseTramoActual;
+    const convenio = updateData.convenio !== undefined ? updateData.convenio : convenioActual;
+    
+    // RECALCULAR precioBaseTramo automáticamente si:
+    // 1. Cambió el peso (puede cambiar el tramo para FNS012/FNS026)
+    // 2. Cambió el convenio
+    // 3. precioBaseTramo es null y hay convenio
+    // IMPORTANTE: Ignorar cualquier valor de precioBaseTramo que venga en el request (Opción A recomendada)
+    const pesoCambio = updateData.pesoGrd !== undefined && updateData.pesoGrd !== pesoActual;
+    const convenioCambio = updateData.convenio !== undefined && updateData.convenio !== convenioActual;
+    const necesitaRecalculo = pesoCambio || convenioCambio || (!precioBaseTramoActual && convenio);
+    
+    let precioBaseTramo: number | null = precioBaseTramoActual;
+    if (necesitaRecalculo && convenio) {
+      const pesoParaCalculo = pesoCambio && updateData.pesoGrd !== undefined 
+        ? Number(updateData.pesoGrd) 
+        : peso;
+      precioBaseTramo = await obtenerPrecioBaseTramo(convenio, pesoParaCalculo);
+      if (precioBaseTramo !== null) {
+        updateData.precioBaseTramo = precioBaseTramo;
+        if (process.env.NODE_ENV === 'development') {
+          console.log(`💰 Precio base recalculado para episodio ${episodio.id}: ${precioBaseTramo} (convenio: ${convenio}, peso: ${pesoParaCalculo})`);
+        }
+      }
+    } else if (updateData.precioBaseTramo !== undefined) {
+      // Si viene precioBaseTramo en el request pero no necesita recálculo, ignorarlo (mantener consistencia)
+      delete updateData.precioBaseTramo;
+      if (process.env.NODE_ENV === 'development') {
+        console.log(`⚠️ precioBaseTramo enviado en request ignorado (se recalcula automáticamente)`);
+      }
+    }
+    
+    // Usar el precio calculado para los cálculos siguientes
+    const precioBaseTramoParaCalculo = precioBaseTramo ?? 0;
     const montoAT = updateData.montoAt !== undefined ? (updateData.montoAt ?? 0) : montoATActual;
     const pagoOutlierSup = updateData.pagoOutlierSuperior !== undefined ? (updateData.pagoOutlierSuperior ?? 0) : pagoOutlierSupActual;
     const pagoDemora = updateData.pagoDemoraRescate !== undefined ? (updateData.pagoDemoraRescate ?? 0) : pagoDemoraActual;
 
-    // PASO 1: SIEMPRE recalcular valorGRD = peso * precioBaseTramo
-    // (ignorar cualquier valor que haya venido en el request)
-    const valorGRDCalculado = calcularValorGRD(peso, precioBaseTramo);
-    updateData.valorGrd = valorGRDCalculado;
+    // ¿Hay overrides manuales?
+    const tieneOverrideValorGRD = esFueraDeNorma && updateData.valorGrd !== undefined && updateData.valorGrd !== null;
+    const tieneOverrideMontoFinal = esFueraDeNorma && updateData.montoFinal !== undefined && updateData.montoFinal !== null;
 
-    // PASO 2: Calcular montoFinal usando el valorGRD calculado
-    const montoFinalCalculado = calcularMontoFinal(
-      valorGRDCalculado,
-      montoAT,
-      pagoOutlierSup,
-      pagoDemora
-    );
-    updateData.montoFinal = montoFinalCalculado;
+    // PASO 1: valorGRD
+    let valorGRDFinal: number;
+    if (tieneOverrideValorGRD) {
+      // Si FINANZAS manda valorGRD en caso fuera de norma, lo respetamos
+      const v = typeof updateData.valorGrd === 'string'
+        ? parseFloat(updateData.valorGrd)
+        : Number(updateData.valorGrd);
+      valorGRDFinal = !isNaN(v) && isFinite(v) ? v : 0;
+    } else {
+      // Caso normal: lo calculamos
+      valorGRDFinal = calcularValorGRD(peso ?? 0, precioBaseTramoParaCalculo);
+    }
+    updateData.valorGrd = valorGRDFinal;
+
+    // PASO 2: montoFinal
+    let montoFinalFinal: number;
+    if (tieneOverrideMontoFinal) {
+      // Si FINANZAS manda montoFinal en fuera de norma, lo respetamos
+      const m = typeof updateData.montoFinal === 'string'
+        ? parseFloat(updateData.montoFinal)
+        : Number(updateData.montoFinal);
+      montoFinalFinal = !isNaN(m) && isFinite(m) ? m : 0;
+    } else {
+      // Caso normal: lo calculamos
+      montoFinalFinal = calcularMontoFinal(
+        valorGRDFinal,
+        montoAT,
+        pagoOutlierSup,
+        pagoDemora
+      );
+    }
+    updateData.montoFinal = montoFinalFinal;
 
 
     // Actualizar el episodio
@@ -1564,7 +2022,12 @@ async function validateRow(row: RawRow, index: number): Promise<boolean> {
 // ================== ¡MODIFICACIÓN 2: processRow! ===================
 // ===================================================================
 // Se usa prisma.grd.upsert() para crear el GRD si no existe.
-async function processRow(row: RawRow) {
+async function processRow(row: RawRow, rowIndex?: number) {
+  // Log muy visible para confirmar que el código se ejecuta
+  console.log('========================================');
+  console.log(`🔄 PROCESANDO FILA ${rowIndex || '?'} - Episodio: ${row['Episodio CMBD']}`);
+  console.log('========================================');
+  
   const rut = cleanString(row['RUT']);
   const nombre = cleanString(row['Nombre']);
   const grdCode = cleanString(row['IR GRD (Código)'])!;
@@ -1663,6 +2126,8 @@ async function processRow(row: RawRow) {
     montoRn: isNumeric(row['Facturación Total del episodio'])
       ? parseFloat(row['Facturación Total del episodio'])
       : 0,
+    // Ojo: aquí seguimos usando la columna histórica "Peso Medio [Norma IR]"
+    // Si en algún momento migran a "Peso GRD Medio (Todos)", se puede extender
     pesoGrd: isNumeric(row['Peso Medio [Norma IR]'])
       ? parseFloat(row['Peso Medio [Norma IR]'])
       : 0,
@@ -1677,7 +2142,37 @@ async function processRow(row: RawRow) {
     pacienteId: paciente.id,
     grdId: grdRule.id,
   };
-  
+
+  // ===========================
+  // Calcular precioBaseTramo
+  // ===========================
+  let precioBaseTramoCalculado: number | null = null;
+  const pesoParaCalculo =
+    episodioData.pesoGrd !== undefined && episodioData.pesoGrd !== null
+      ? Number(episodioData.pesoGrd)
+      : null;
+
+  if (convenioFinal && pesoParaCalculo !== null) {
+    try {
+      precioBaseTramoCalculado = await obtenerPrecioBaseTramo(convenioFinal, pesoParaCalculo);
+      if (precioBaseTramoCalculado !== null) {
+        episodioData.precioBaseTramo = precioBaseTramoCalculado;
+        console.log(
+          `💰 Precio base calculado para episodio ${episodioData.episodioCmdb}: ${precioBaseTramoCalculado} (convenio: ${convenioFinal}, peso: ${pesoParaCalculo})`
+        );
+      } else {
+        console.warn(
+          `⚠️ No se pudo calcular precio base para episodio ${episodioData.episodioCmdb} (convenio: ${convenioFinal}, peso: ${pesoParaCalculo})`
+        );
+      }
+    } catch (err) {
+      console.error(
+        `❌ Error calculando precioBaseTramo para episodio ${episodioData.episodioCmdb}:`,
+        (err as any)?.message || err
+      );
+    }
+  }
+
   // Log detallado para debug
   console.log(`💾 Datos del episodio antes de crear:`, {
     episodioCmdb: episodioData.episodioCmdb,
@@ -1690,6 +2185,7 @@ async function processRow(row: RawRow) {
     convenioEnData: episodioData.convenio,
     convenioEsString: typeof episodioData.convenio === 'string',
     convenioLength: episodioData.convenio?.length,
+    precioBaseTramo: episodioData.precioBaseTramo ?? null,
   });
 
   // Verificar explícitamente que convenio esté en el objeto antes de crear
@@ -1704,6 +2200,18 @@ async function processRow(row: RawRow) {
 
   const episodioCreado = await prisma.episodio.create({
     data: episodioData,
+    include: {
+      paciente: true,
+      grd: true,
+    },
+  });
+  
+  // Log detallado del episodio creado
+  console.log(`📦 Episodio creado - ID: ${episodioCreado.id}, Episodio: ${episodioCreado.episodioCmdb}`);
+  console.log(`   Convenio en objeto creado: "${episodioCreado.convenio || 'null/undefined'}"`);
+  console.log(`   Precio base tramo guardado: ${episodioCreado.precioBaseTramo ?? 'null'}`);
+  
+  return episodioCreado;
     include: {
       paciente: true,
       grd: true,
@@ -1819,8 +2327,8 @@ router.post('/episodios/import', requireAuth, upload.single('file'), async (req:
       if (isValid) {
         validRecords.push(row);
         try {
-          // Usamos el processRow modificado
-          const episode = await processRow(row);
+          // Usamos el processRow modificado (pasar el índice para logs)
+          const episode = await processRow(row, index);
           createdEpisodes.push(episode);
         } catch (err: any) {
           console.error(`Error procesando fila ${index}:`, err.message);

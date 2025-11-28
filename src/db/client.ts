@@ -2,7 +2,9 @@ import { PrismaClient } from '@prisma/client';
 
 export const prisma = new PrismaClient({
   log: process.env.NODE_ENV === 'development' 
-    ? ['query', 'error', 'warn'] 
+    ? process.env.PRISMA_LOG_QUERIES === 'true' 
+      ? ['query', 'error', 'warn'] 
+      : ['error', 'warn'] // Solo errores y warnings, no queries (muy verboso)
     : ['error'],
   errorFormat: 'pretty',
 });
