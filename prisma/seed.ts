@@ -86,18 +86,67 @@ async function seedClinico() {
   console.log('Dataset clínico sintético insertado.');
 }
 
-// ---- 3. main ----
+// ---- 3. seed de PrecioConvenio - Rangos CH0041 ----
+async function seedPrecioConvenio() {
+  const existentes = await prisma.precioConvenio.count({
+    where: { convenio: 'CH0041' }
+  });
+
+  if (existentes === 0) {
+    await prisma.precioConvenio.createMany({
+      data: [
+        {
+          convenio: 'CH0041',
+          nombre_asegi: 'FONASA',
+          tipoAsegurad: 'Pública',
+          tipoConvenio: 'GRD',
+          fechaAdmision: new Date('2023-01-01'),
+          fechaFin: new Date('2024-08-28'),
+          precio: 95000,
+        },
+        {
+          convenio: 'CH0041',
+          nombre_asegi: 'FONASA',
+          tipoAsegurad: 'Pública',
+          tipoConvenio: 'GRD',
+          fechaAdmision: new Date('2024-08-29'),
+          fechaFin: new Date('2025-08-28'),
+          precio: 98990,
+        },
+        {
+          convenio: 'CH0041',
+          nombre_asegi: 'FONASA',
+          tipoAsegurad: 'Pública',
+          tipoConvenio: 'GRD',
+          fechaAdmision: new Date('2025-08-29'),
+          fechaFin: new Date('2025-12-31'),
+          precio: 102455,
+        },
+      ],
+      skipDuplicates: true,
+    });
+    console.log('✅ Rangos CH0041 insertados en PrecioConvenio');
+  } else {
+    console.log('ℹ️ Rangos CH0041 ya existen');
+  }
+}
+
+// ---- 4. main ----
 async function main() {
+  console.log('🌱 Iniciando seed...');
   await seedUsers();
   // await seedClinico(); // Opcional: Comenta esto si no quieres datos de episodios falsos
+  await seedPrecioConvenio(); // 👈 AGREGAR ESTA LÍNEA
+  console.log('✅ Seed completo.');
 }
 
 main()
   .then(() => {
-    console.log('Seed completo.');
+    console.log('✅ Seed exitoso.');
+    process.exit(0);
   })
   .catch((e) => {
-    console.error(e);
+    console.error('❌ Error en seed:', e);
     process.exit(1);
   })
   .finally(async () => {

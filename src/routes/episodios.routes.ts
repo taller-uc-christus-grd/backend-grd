@@ -224,6 +224,265 @@ async function obtenerPrecioBaseTramo(
   return null;
 }
 
+/**
+ * Obtiene el "Monto día espera" para CH0041 según la fecha de admisión
+ * Consulta PrecioConvenio buscando el rango (fechaAdmision - fechaFin) que contiene la fecha del episodio
+ */
+async function obtenerMontoDiaEsperaCH0041(fechaIngreso: Date | null | undefined): Promise<number | null> {
+  if (!fechaIngreso) return null;
+
+  try {
+    const fechaComparar = new Date(fechaIngreso);
+    fechaComparar.setHours(0, 0, 0, 0);
+
+    // Buscar en PrecioConvenio todos los registros de CH0041 con rango de fechas
+    const registros = await prisma.precioConvenio.findMany({
+      where: {
+        convenio: 'CH0041',
+        fechaAdmision: { not: null },
+        fechaFin: { not: null },
+      },
+      orderBy: { fechaAdmision: 'asc' },
+    });
+
+    if (!registros || registros.length === 0) {
+      console.warn('⚠️ CH0041: No hay rangos configurados en PrecioConvenio');
+      return null;
+    }
+
+    // Buscar el rango que contiene la fecha de ingreso
+    for (const reg of registros) {
+      if (reg.fechaAdmision && reg.fechaFin) {
+        const inicio = new Date(reg.fechaAdmision);
+        const fin = new Date(reg.fechaFin);
+        inicio.setHours(0, 0, 0, 0);
+        fin.setHours(23, 59, 59, 999);
+
+        // Si la fecha ingreso cae dentro del rango
+        if (fechaComparar >= inicio && fechaComparar <= fin) {
+          const monto = Number(reg.precio ?? 0);
+          if (!isNaN(monto) && isFinite(monto) && monto > 0) {
+            console.log(`✅ CH0041: Monto ${monto} para fecha ${fechaComparar.toISOString().split('T')[0]} (rango: ${inicio.toISOString().split('T')[0]} a ${fin.toISOString().split('T')[0]})`);
+            return monto;
+          }
+        }
+      }
+    }
+
+    console.warn(`⚠️ CH0041: No se encontró rango para fecha ${fechaComparar.toISOString().split('T')[0]}`);
+    return null;
+  } catch (err) {
+    console.error('obtenerMontoDiaEsperaCH0041 - error:', err);
+    return null;
+  }
+}
+
+/**
+ * Calcula el pago por demora de rescate (US-12)
+ * 
+ * CH0041: diasDemora × montoDiaEspera (desde PrecioConvenio)
+ * FNS012/FNS026/FNS019: ((pesoGrd × precioBaseTramo) / diasPercentil75) × diasDemora
+ */
+async function calcularPagoDemoraRescate(params: {
+  convenio?: string | null;
+  diasDemora?: number | null;
+  pagoDemoraInput?: number | null;
+  pesoGrd?: number | null;
+  precioBaseTramo?: number | null;
+  grdId?: number | null;
+  fechaIngreso?: Date | null;
+}): Promise<number> {
+  const { convenio, diasDemora, pagoDemoraInput, pesoGrd, precioBaseTramo, grdId, fechaIngreso } = params;
+  
+  const dias = typeof diasDemora === 'number' && diasDemora > 0 ? diasDemora : 0;
+  const conv = (convenio || '').toString().trim().toUpperCase();
+
+  if (dias === 0) {
+    return (typeof pagoDemoraInput === 'number' && !isNaN(pagoDemoraInput)) ? pagoDemoraInput : 0;
+  }
+
+  try {
+    // ========== CH0041 ==========
+    if (conv === 'CH0041') {
+      const montoDia = await obtenerMontoDiaEsperaCH0041(fechaIngreso);
+      if (!montoDia || isNaN(montoDia)) {
+        console.warn('⚠️ CH0041: No se encontró montoDiaEspera. Usando input o 0.');
+        return (typeof pagoDemoraInput === 'number' && !isNaN(pagoDemoraInput)) ? pagoDemoraInput : 0;
+      }
+      const resultado = dias * montoDia;
+      console.log(`✅ CH0041: ${dias} días × ${montoDia} = ${resultado}`);
+      return resultado;
+    }
+
+    // ========== FNS012 / FNS026 / FNS019 ==========
+    if (conv === 'FNS012' || conv === 'FNS026' || conv === 'FNS019') {
+      let diasP75: number | null = null;
+      
+      // Opción 1: Obtener desde Grd.puntoCorteSup
+      if (grdId) {
+        const grd = await prisma.grd.findUnique({ where: { id: grdId } });
+        if (grd && grd.puntoCorteSup) {
+          diasP75 = Number(grd.puntoCorteSup);
+        }
+      }
+      
+      // Opción 2: Fallback desde ConfiguracionSistema si es necesario
+      if (!diasP75) {
+        const cfg = await prisma.configuracionSistema.findUnique({ 
+          where: { clave: 'diasPercentil75' } 
+        });
+        if (cfg && cfg.valor) {
+          diasP75 = parseFloat(cfg.valor);
+        }
+      }
+      
+      // Si aún no hay valor, usar 1 para evitar división por cero
+      if (!diasP75 || isNaN(diasP75) || diasP75 <= 0) {
+        console.warn(`⚠️ ${conv}: diasPercentil75 no disponible, usando 1.`);
+        diasP75 = 1;
+      }
+
+      const peso = Number(pesoGrd ?? 0);
+      const precio = Number(precioBaseTramo ?? 0);
+      const factor = (peso * precio) / diasP75;
+      const resultado = factor * dias;
+      
+      console.log(`✅ ${conv}: ((${peso} × ${precio}) / ${diasP75}) × ${dias} = ${resultado}`);
+      return resultado;
+    }
+
+    // ========== DEFAULT ==========
+    return (typeof pagoDemoraInput === 'number' && !isNaN(pagoDemoraInput)) ? pagoDemoraInput : 0;
+  } catch (err) {
+    console.error('calcularPagoDemoraRescate - error:', err);
+    return (typeof pagoDemoraInput === 'number' && !isNaN(pagoDemoraInput)) ? pagoDemoraInput : 0;
+  }
+}
+
+/**
+ * Calcula el pago por outlier superior (US-11) - SOLO para FNS012
+ * 
+ * Fórmula:
+ * Pago Outlier = (Días post carencia × Peso GRD × Precio Base) / Días percentil 75
+ * 
+ * Donde:
+ * - Período de carencia = Punto corte superior + Percentil 50
+ * - Días post carencia = Estancia total - Período de carencia
+ * - Días percentil 75 = Grd.puntoCorteSup (valor Z para percentil 75)
+ */
+async function calcularPagoOutlierSuperior(params: {
+  convenio?: string | null;
+  diasEstada?: number | null;
+  pesoGrd?: number | null;
+  precioBase?: number | null;
+  grdId?: number | null;
+  esFueraDeNorma?: boolean;
+}): Promise<number> {
+  const { convenio, diasEstada, pesoGrd, precioBase, grdId, esFueraDeNorma } = params;
+  
+  const conv = (convenio || '').toString().trim().toUpperCase();
+  
+  // Solo aplicar para FNS012
+  if (conv !== 'FNS012') {
+    return 0;
+  }
+  
+  // Solo aplicar si el episodio está fuera de norma (outlier superior)
+  if (!esFueraDeNorma) {
+    return 0;
+  }
+  
+  try {
+    // Obtener datos del GRD
+    let puntoCorteSuperíor: number | null = null;
+    let percentil50: number | null = null;
+    
+    if (grdId) {
+      const grd = await prisma.grd.findUnique({ where: { id: grdId } });
+      if (grd) {
+        if (grd.puntoCorteSup) puntoCorteSuperíor = Number(grd.puntoCorteSup);
+        if (grd.puntoCorteInf) percentil50 = Number(grd.puntoCorteInf); // Asumir que puntoCorteInf es el percentil 50
+      }
+    }
+    
+    // Fallback desde ConfiguracionSistema si es necesario
+    if (puntoCorteSuperíor === null) {
+      const cfgSup = await prisma.configuracionSistema.findUnique({
+        where: { clave: 'puntoCorteSuperior' }
+      });
+      if (cfgSup && cfgSup.valor) puntoCorteSuperíor = parseFloat(cfgSup.valor);
+    }
+    
+    if (percentil50 === null) {
+      const cfgP50 = await prisma.configuracionSistema.findUnique({
+        where: { clave: 'percentil50' }
+      });
+      if (cfgP50 && cfgP50.valor) percentil50 = parseFloat(cfgP50.valor);
+    }
+    
+    // Si faltan valores críticos, retornar 0
+    if (puntoCorteSuperíor === null || puntoCorteSuperíor <= 0) {
+      console.warn('⚠️ FNS012: puntoCorteSuperior no disponible');
+      return 0;
+    }
+    
+    if (percentil50 === null || percentil50 <= 0) {
+      console.warn('⚠️ FNS012: percentil50 no disponible');
+      return 0;
+    }
+    
+    // Validar parámetros
+    const dias = typeof diasEstada === 'number' && diasEstada > 0 ? diasEstada : 0;
+    const peso = typeof pesoGrd === 'number' && pesoGrd > 0 ? pesoGrd : 0;
+    const precio = typeof precioBase === 'number' && precioBase > 0 ? precioBase : 0;
+    
+    // Si no hay días, peso o precio, retornar 0
+    if (dias === 0 || peso === 0 || precio === 0) {
+      console.log(`ℹ️ FNS012 Outlier: Retornando 0 (días: ${dias}, peso: ${peso}, precio: ${precio})`);
+      return 0;
+    }
+    
+    // Calcular período de carencia
+    const periodoCarencia = puntoCorteSuperíor + percentil50;
+    console.log(`📊 FNS012 Outlier - Período de carencia: ${puntoCorteSuperíor} + ${percentil50} = ${periodoCarencia}`);
+    
+    // Calcular días post carencia
+    const diasPostCarencia = Math.max(0, dias - periodoCarencia);
+    
+    if (diasPostCarencia <= 0) {
+      console.log(`ℹ️ FNS012 Outlier: Episodio dentro del período de carencia (${dias} ≤ ${periodoCarencia}). Retornando 0.`);
+      return 0;
+    }
+    
+    // Obtener días percentil 75 (normalmente igual a puntoCorteSuperior)
+    let diasPercentil75 = puntoCorteSuperíor;
+    
+    // Fallback desde ConfiguracionSistema si es diferente
+    const cfgP75 = await prisma.configuracionSistema.findUnique({
+      where: { clave: 'diasPercentil75' }
+    });
+    if (cfgP75 && cfgP75.valor) {
+      diasPercentil75 = parseFloat(cfgP75.valor);
+    }
+    
+    if (diasPercentil75 <= 0) {
+      console.warn('⚠️ FNS012 Outlier: diasPercentil75 inválido, usando 1');
+      diasPercentil75 = 1;
+    }
+    
+    // Aplicar fórmula: (Días post carencia × Peso GRD × Precio Base) / Días percentil 75
+    const pagoOutlier = (diasPostCarencia * peso * precio) / diasPercentil75;
+    
+    console.log(`✅ FNS012 Outlier: (${diasPostCarencia} × ${peso} × ${precio}) / ${diasPercentil75} = ${pagoOutlier}`);
+    
+    return pagoOutlier;
+  } catch (err) {
+    console.error('calcularPagoOutlierSuperior - error:', err);
+    return 0;
+  }
+}
+
+
 // Función para normalizar datos de episodio antes de enviar al frontend
 function normalizeEpisodeResponse(episode: any): any {
   // Normalizar campo 'at': SIEMPRE devolver "S" o "N" (string)
@@ -1506,22 +1765,60 @@ router.patch('/episodios/:id',
     }
     updateData.valorGrd = valorGRDFinal;
 
-    // PASO 2: montoFinal
+    // PASO 2: Calcular pagoDemoraRescate AUTOMÁTICAMENTE (siempre, incluso si diasDemoraRescate no cambió)
+    // Usar el valor más nuevo disponible
+    const diasParaCalculo = updateData.diasDemoraRescate !== undefined
+      ? Number(updateData.diasDemoraRescate ?? 0)
+      : (episodio.diasDemoraRescate ? Number(episodio.diasDemoraRescate) : 0);
+
+    const pagoDemoraCalculado = await calcularPagoDemoraRescate({
+      convenio,
+      diasDemora: diasParaCalculo,
+      pagoDemoraInput: pagoDemora,
+      pesoGrd: peso,
+      precioBaseTramo: precioBaseTramoParaCalculo,
+      grdId: episodio.grdId ?? null,
+      fechaIngreso: episodio.fechaIngreso
+    });
+
+    // IMPORTANTE: SIEMPRE actualizar pagoDemoraRescate, incluso si no cambió
+    updateData.pagoDemoraRescate = pagoDemoraCalculado;
+    console.log(`💰 Pago demora SIEMPRE recalculado: ${pagoDemoraCalculado} (convenio: ${convenio}, días: ${diasParaCalculo})`);
+
+    // PASO 2.5: Calcular pagoOutlierSuperior AUTOMÁTICAMENTE (SOLO FNS012, SIEMPRE)
+    const pagoOutlierCalculado = await calcularPagoOutlierSuperior({
+      convenio,
+      diasEstada: episodio.diasEstada ?? null,
+      pesoGrd: peso,
+      precioBase: precioBaseTramoParaCalculo,
+      grdId: episodio.grdId ?? null,
+      esFueraDeNorma: episodio.grupoEnNorma === false
+    });
+
+    // IMPORTANTE: SIEMPRE actualizar pagoOutlierSuperior (solo FNS012 si está fuera de norma)
+    // Si no es FNS012 o no está fuera de norma, será 0 (correcto)
+    updateData.pagoOutlierSuperior = pagoOutlierCalculado;
+    console.log(`💰 Pago outlier SIEMPRE recalculado: ${pagoOutlierCalculado} (convenio: ${convenio}, FNS012: ${convenio === 'FNS012'}, outlier: ${episodio.grupoEnNorma === false})`);
+
+    // PASO 3: montoFinal (SIEMPRE recalcular)
+    const pagoDemoraParaMonto = updateData.pagoDemoraRescate ?? 0;
+    const pagoOutlierParaMonto = updateData.pagoOutlierSuperior ?? 0;
+
     let montoFinalFinal: number;
     if (tieneOverrideMontoFinal) {
-      // Si FINANZAS manda montoFinal en fuera de norma, lo respetamos
       const m = typeof updateData.montoFinal === 'string'
         ? parseFloat(updateData.montoFinal)
         : Number(updateData.montoFinal);
       montoFinalFinal = !isNaN(m) && isFinite(m) ? m : 0;
+      console.log(`⚠️ Override manual de montoFinal: ${montoFinalFinal}`);
     } else {
-      // Caso normal: lo calculamos
       montoFinalFinal = calcularMontoFinal(
         valorGRDFinal,
         montoAT,
-        pagoOutlierSup,
-        pagoDemora
+        pagoOutlierParaMonto,
+        pagoDemoraParaMonto
       );
+      console.log(`✅ montoFinal SIEMPRE recalculado: ${montoFinalFinal}`);
     }
     updateData.montoFinal = montoFinalFinal;
 
