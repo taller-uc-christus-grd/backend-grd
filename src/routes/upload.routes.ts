@@ -455,9 +455,7 @@ async function processRow(row: RawRow) {
   const pagoOutlierSuperior = isNumeric(row['Pago Outlier Superior']) ? parseFloat(row['Pago Outlier Superior']) : 0;
 
   // Crear el episodio con convenio y precioBaseTramo calculados
-  
-  
-    await prisma.episodio.create({
+  await prisma.episodio.create({
     data: {
       centro: cleanString(row['Hospital (Descripción)']),
       numeroFolio: cleanString(row['ID Derivación']),
@@ -494,7 +492,7 @@ async function processRow(row: RawRow) {
   console.log(
     `✅ [UPLOAD] Episodio creado: ${cleanString(row['Episodio CMBD'])}, convenio: "${convenio || ''}"`
   );
-  
+}
 
 // --- Endpoint de Carga (AHORA GUARDA EN DB) ---
 router.post('/upload', requireAuth, upload.single('file'), async (req: Request, res: Response) => {

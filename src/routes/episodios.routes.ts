@@ -1233,11 +1233,10 @@ router.patch('/episodios/:id',
   console.log('🔍 Roles permitidos en requireRole:', ['finanzas', 'FINANZAS', 'gestion', 'GESTION', 'codificador', 'CODIFICADOR']);
   try {
     const { id } = req.params;
-    const userRole = req.user?.role || '';
-    console.log('🔍 Rol del usuario recibido:', userRole);
     
     // Obtener rol del usuario y normalizarlo
     const userRole = req.user?.role || '';
+    console.log('🔍 Rol del usuario recibido:', userRole);
     const normalizedRole = userRole
       .toUpperCase()
       .normalize('NFD')
@@ -2210,17 +2209,6 @@ async function processRow(row: RawRow, rowIndex?: number) {
   console.log(`📦 Episodio creado - ID: ${episodioCreado.id}, Episodio: ${episodioCreado.episodioCmdb}`);
   console.log(`   Convenio en objeto creado: "${episodioCreado.convenio || 'null/undefined'}"`);
   console.log(`   Precio base tramo guardado: ${episodioCreado.precioBaseTramo ?? 'null'}`);
-  
-  return episodioCreado;
-    include: {
-      paciente: true,
-      grd: true,
-    },
-  });
-  
-  // Log detallado del episodio creado
-  console.log(`📦 Episodio creado - ID: ${episodioCreado.id}, Episodio: ${episodioCreado.episodioCmdb}`);
-  console.log(`   Convenio en objeto creado: "${episodioCreado.convenio || 'null/undefined'}"`);
   
   return episodioCreado;
 }
