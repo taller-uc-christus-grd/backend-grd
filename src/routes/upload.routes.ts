@@ -250,6 +250,17 @@ async function validateRow(row: RawRow, index: number): Promise<boolean> {
     return false;
   }
 
+  const fieldsCamposBlancoPermitidos = [
+    'Estado RN',
+    'AT',
+    'AT Detalle',
+    'Monto AT',
+    'Monto RN',
+    'Días Demora Rescate',
+    'Pago Demora Rescate',
+    'Pago Outlier Superior'
+  ];
+
   return true;
 }
 
@@ -345,6 +356,16 @@ async function processRow(row: RawRow) {
     console.warn(`⚠️ Convenio no encontrado. Columnas:`, Object.keys(row).filter(k => k.toLowerCase().includes('conven')));
   }
 
+  // ✅ SOLO AGREGAR ESTOS CAMPOS CON DEFAULTS EN EL create()
+  const estadoRN = cleanString(row['Estado RN']) || 'Pendiente';
+  const atValue = cleanString(row['AT']);
+  const atSn = atValue ? (atValue.toUpperCase() === 'S' ? true : false) : false;
+  const atDetalle = atSn ? cleanString(row['AT Detalle']) : null;
+  const montoAt = isNumeric(row['Monto AT']) ? parseFloat(row['Monto AT']) : 0;
+  const diasDemoraRescate = isNumeric(row['Días Demora Rescate']) ? parseInt(row['Días Demora Rescate']) : 0;
+  const pagoDemoraRescate = isNumeric(row['Pago Demora Rescate']) ? parseFloat(row['Pago Demora Rescate']) : 0;
+  const pagoOutlierSuperior = isNumeric(row['Pago Outlier Superior']) ? parseFloat(row['Pago Outlier Superior']) : 0;
+
   // Crear el episodio con convenio y precioBaseTramo calculados
   await prisma.episodio.create({
     data: {
@@ -360,9 +381,18 @@ async function processRow(row: RawRow) {
         ? parseFloat(row['Facturación Total del episodio'])
         : 0,
       pesoGrd: pesoGRD,
-      convenio: convenio, // Guardar el convenio
-      precioBaseTramo: precioBaseTramoCalculado, // Precio base calculado automáticamente
+      convenio: convenio,
+      precioBaseTramo: precioBaseTramoCalculado,
       inlierOutlier: cleanString(row['IR Alta Inlier / Outlier']),
+      
+      // ✅ NUEVOS CAMPOS CON DEFAULTS PARA CAMPOS EN BLANCO
+      estadoRn: estadoRN,
+      atSn: atSn,
+      atDetalle: atDetalle,
+      montoAt: montoAt,
+      diasDemoraRescate: diasDemoraRescate,
+      pagoDemoraRescate: pagoDemoraRescate,
+      pagoOutlierSuperior: pagoOutlierSuperior,
       
       pacienteId: paciente.id,
       grdId: grdRule.id,
