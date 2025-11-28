@@ -1346,49 +1346,66 @@ router.patch('/episodios/:id',
     console.log(' Permisos verificados correctamente. Procediendo con actualización...');
 
     // Validar permisos según campos
-    // Campo AT (S/N) solo puede ser editado por codificador
-    // Campos AT Detalle y Monto AT solo pueden ser editados por finanzas
+    // Campo AT (S/N) puede ser editado por codificador y gestion
+    // Campos AT Detalle puede ser editado por codificador y gestion (montoAT se autocompleta)
     const campoAT = 'at';
-    const camposATFinanzas = ['atDetalle', 'montoAT'];
+    const camposATFinanzas = ['montoAT']; // montoAT no es editable directamente, solo se autocompleta
     const camposSolicitados = Object.keys(requestBody);
     const intentaEditarAT = camposSolicitados.includes(campoAT);
+    const intentaEditarATDetalle = camposSolicitados.includes('atDetalle');
     const intentaEditarATFinanzas = camposSolicitados.some(campo => camposATFinanzas.includes(campo));
     
     console.log('🔍 Validación de permisos AT:', {
       camposSolicitados: camposSolicitados,
       intentaEditarAT: intentaEditarAT,
+      intentaEditarATDetalle: intentaEditarATDetalle,
       intentaEditarATFinanzas: intentaEditarATFinanzas,
       isCodificador: isCodificador,
+      isGestion: isGestion,
       isFinanzas: isFinanzas,
       requestBody: requestBody
     });
     
-    // Validar campo AT (S/N) - solo codificador
-    if (intentaEditarAT && !isCodificador) {
-      console.log('❌ Acceso denegado: Usuario intenta editar campo AT (S/N) pero no es codificador');
+    // Validar campo AT (S/N) - codificador y gestion
+    if (intentaEditarAT && !isCodificador && !isGestion) {
+      console.log('❌ Acceso denegado: Usuario intenta editar campo AT (S/N) pero no es codificador ni gestion');
       return res.status(403).json({
-        message: 'No tienes permisos para editar el campo AT (S/N). Solo el perfil de codificador puede modificar este campo.',
+        message: 'No tienes permisos para editar el campo AT (S/N). Solo los perfiles de codificador y gestion pueden modificar este campo.',
         error: 'Forbidden',
         field: campoAT
       });
     }
     
-    // Validar campos AT Detalle y Monto AT - solo finanzas
-    if (intentaEditarATFinanzas && !isFinanzas) {
-      console.log('❌ Acceso denegado: Usuario intenta editar campos AT Detalle/Monto AT pero no es finanzas');
+    // Validar campo AT Detalle - codificador y gestion
+    if (intentaEditarATDetalle && !isCodificador && !isGestion) {
+      console.log('❌ Acceso denegado: Usuario intenta editar campo AT Detalle pero no es codificador ni gestion');
       return res.status(403).json({
-        message: 'No tienes permisos para editar los campos AT Detalle y Monto AT. Solo el perfil de finanzas puede modificar estos campos.',
+        message: 'No tienes permisos para editar el campo AT Detalle. Solo los perfiles de codificador y gestion pueden modificar este campo.',
+        error: 'Forbidden',
+        field: 'atDetalle'
+      });
+    }
+    
+    // Validar campo Monto AT - no es editable directamente, solo se autocompleta
+    if (intentaEditarATFinanzas && !isFinanzas) {
+      console.log('❌ Acceso denegado: Usuario intenta editar campo Monto AT pero no es finanzas');
+      return res.status(403).json({
+        message: 'No tienes permisos para editar el campo Monto AT. Este campo se autocompleta automáticamente al editar AT Detalle.',
         error: 'Forbidden',
         field: camposSolicitados.find(campo => camposATFinanzas.includes(campo)) || 'unknown'
       });
     }
     
-    if (intentaEditarAT && isCodificador) {
-      console.log('✅ Usuario codificador puede editar campo AT (S/N)');
+    if (intentaEditarAT && (isCodificador || isGestion)) {
+      console.log(`✅ Usuario ${isCodificador ? 'codificador' : 'gestion'} puede editar campo AT (S/N)`);
+    }
+    
+    if (intentaEditarATDetalle && (isCodificador || isGestion)) {
+      console.log(`✅ Usuario ${isCodificador ? 'codificador' : 'gestion'} puede editar campo AT Detalle`);
     }
     
     if (intentaEditarATFinanzas && isFinanzas) {
-      console.log('✅ Usuario finanzas puede editar campos AT Detalle/Monto AT');
+      console.log('✅ Usuario finanzas puede editar campo Monto AT');
     }
 
     // 2. MODIFICACIÓN: "Rescatar" el campo 'validado' (de gestión) ANTES de la validación
