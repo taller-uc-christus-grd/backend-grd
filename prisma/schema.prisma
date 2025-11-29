@@ -54,7 +54,6 @@ model Episodio {
   fechaAlta           DateTime?
   servicioAlta        String?
   estadoRn            String?
-  validado            Boolean? // null = Pendiente, true = Aprobado, false = Rechazado
   atSn                Boolean?
   atDetalle           String?
   montoAt             Decimal?              @db.Decimal(14, 2)
@@ -75,11 +74,12 @@ model Episodio {
   especialidad        String?
   anio                Int?
   mes                 Int?
-  convenio            String?   @db.VarChar(100) // Convenio bajo el cual se calcula el episodio
   pacienteId          Int?
   grdId               Int?
   createdAt           DateTime              @default(now())
   updatedAt           DateTime              @updatedAt
+  convenio            String?               @db.VarChar(100)
+  validado            Boolean?
   diagnosticos        Diagnostico[]
   documentos          DocumentoCloudinary[]
   grd                 Grd?                  @relation(fields: [grdId], references: [id])
@@ -94,25 +94,24 @@ model Episodio {
 
 model PrecioConvenio {
   id             String    @id @default(uuid())
-  aseguradora    String?   @default("") // Código de aseguradora (ej: "50000000")
-  nombre_asegi   String?   @default("") // Nombre de la aseguradora (ej: "FONASA")
-  convenio       String?   @default("") // Código del convenio (ej: "CH0041", "FNS012")
-  descr_convenio String?   @default("") // Descripción del convenio (ej: "GRD CARDIOPATIA")
-  tipoAsegurad   String?   @default("") // Tipo de aseguradora (ej: "Pública")
-  tipoConvenio   String?   @default("") // Tipo de convenio (ej: "Público - GRD", "Público - GRD T1")
-  tramo          String? // Tramo (puede ser null o vacío, ej: "T1", "T2", "T3")
-  fechaAdmision  DateTime? // Fecha de admisión (ej: "29-08-2025") - opcional para permitir guardar campo por campo
-  fechaFin       DateTime? // Fecha fin (ej: "31-12-2025") - opcional para permitir guardar campo por campo
-  precio         Float?    @default(0) // Precio del convenio (ej: 84.536, 202.666)
+  aseguradora    String?   @default("")
+  nombre_asegi   String?   @default("")
+  convenio       String?   @default("")
+  descr_convenio String?   @default("")
+  tipoAsegurad   String?   @default("")
+  tipoConvenio   String?   @default("")
+  tramo          String?
+  fechaAdmision  DateTime?
+  fechaFin       DateTime?
+  precio         Float?    @default(0)
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 }
 
 model AjusteTecnologia {
-  id    String  @id @default(uuid())
-  at    String? @default("") // Descripción del AT (ej: "Stent mas dispositivo de liberación")
-  monto Float?  @default(0) // Monto asociado (ej: 51276)
-
+  id        String   @id @default(uuid())
+  at        String?  @default("")
+  monto     Float?   @default(0)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }

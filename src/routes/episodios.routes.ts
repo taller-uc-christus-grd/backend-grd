@@ -338,8 +338,14 @@ function normalizeEpisodeResponse(episode: any): any {
     
     // Campos de solo lectura
     grdCodigo: episode.grd?.codigo || '',
-    peso: toNumber(episode.pesoGrd), // SIEMPRE number o null (para compatibilidad)
-    pesoGrd: toNumber(episode.pesoGrd), // SIEMPRE number o null (nuevo campo "Peso GRD Medio (Todos)")
+    peso: toNumber(episode.grd?.peso), // "Peso Medio [Norma IR]" - viene del modelo Grd
+    pesoGrd: (() => {
+      const pesoGrdValue = toNumber(episode.pesoGrd);
+      const episodioId = episode.episodioCmdb || episode.id;
+      console.log(`📤 [normalizeEpisodeResponse] Episodio ${episodioId}: pesoGrd = ${pesoGrdValue} (tipo: ${typeof pesoGrdValue})`);
+      console.log(`   episode.pesoGrd raw: ${episode.pesoGrd} (tipo: ${typeof episode.pesoGrd})`);
+      return pesoGrdValue;
+    })(), // "Peso GRD Medio (Todos)" - viene del modelo Episodio
     inlierOutlier: episode.inlierOutlier || '',
     // Calcular "Grupo dentro de norma S/N" basado en "Inlier/Outlier": true si es "Inlier", false en cualquier otro caso
     grupoDentroNorma: (() => {
@@ -490,7 +496,7 @@ router.get('/episodios', requireAuth, async (req: Request, res: Response) => {
       where,
       include: {
         paciente: { select: { id: true, nombre: true, rut: true } },
-        grd: { select: { id: true, codigo: true, descripcion: true } },
+        grd: { select: { id: true, codigo: true, descripcion: true, peso: true } },
       },
       orderBy: {
         id: 'desc',
@@ -613,11 +619,11 @@ router.get('/episodios/final', requireAuth, async (req: Request, res: Response) 
     
     // Transformar al formato esperado por el frontend usando normalización
     // Usar la función normalizeEpisodeResponse para cada episodio
-    const items = episodes.map((e: any) => {
+    const items = episodes.map((e: any, idx: number) => {
       const normalized = normalizeEpisodeResponse(e);
       
       // Log para verificar que convenio se normaliza correctamente
-      if (episodes.indexOf(e) < 3) {
+      if (idx < 3) {
         console.log(`🔄 Normalizado episodio ${normalized.episodio}: convenio = "${normalized.convenio || 'null/undefined'}"`);
       }
       
@@ -653,6 +659,16 @@ router.get('/episodios/final', requireAuth, async (req: Request, res: Response) 
         convenio: normalized.convenio || '', // Convenio bajo el cual se calcula el episodio - misma lógica que tipoEpisodio
         grdCodigo: normalized.grdCodigo,
         peso: normalized.peso || 0, // Para compatibilidad con el formato anterior
+        pesoGrd: (() => {
+          const pesoGrdValue = normalized.pesoGrd || null;
+          const episodioId = normalized.episodio || e.episodioCmdb || e.id;
+          if (idx < 3) {
+            console.log(`📤 [GET /episodios/final] Episodio ${episodioId} (idx ${idx}): pesoGrd = ${pesoGrdValue} (tipo: ${typeof pesoGrdValue})`);
+            console.log(`   normalized.pesoGrd raw: ${normalized.pesoGrd} (tipo: ${typeof normalized.pesoGrd})`);
+            console.log(`   e.pesoGrd raw (desde BD): ${e.pesoGrd} (tipo: ${typeof e.pesoGrd})`);
+          }
+          return pesoGrdValue;
+        })(), // Campo "Peso GRD Medio (Todos)" - requerido por el frontend
         montoRN: normalized.montoRN || 0, // Para compatibilidad con el formato anterior
         inlierOutlier: normalized.inlierOutlier || '',
         // Agregar campos normalizados adicionales si el frontend los necesita
@@ -988,6 +1004,7 @@ router.get('/episodios/:id', requireAuth, async (req: Request, res: Response) =>
             id: true,
             codigo: true,
             descripcion: true,
+            peso: true,
             puntoCorteInf: true,
             puntoCorteSup: true,
           },
@@ -1008,6 +1025,7 @@ router.get('/episodios/:id', requireAuth, async (req: Request, res: Response) =>
               id: true,
               codigo: true,
               descripcion: true,
+              peso: true,
               puntoCorteInf: true,
               puntoCorteSup: true,
             },
@@ -1651,6 +1669,7 @@ router.patch('/episodios/:id',
               id: true,
               codigo: true,
               descripcion: true,
+              peso: true,
               puntoCorteInf: true,
               puntoCorteSup: true,
             },
@@ -1672,6 +1691,7 @@ router.patch('/episodios/:id',
               id: true,
               codigo: true,
               descripcion: true,
+              peso: true,
               puntoCorteInf: true,
               puntoCorteSup: true,
             },
@@ -1991,6 +2011,63 @@ function findConvenioValue(row: RawRow): string | null {
   return null;
 }
 
+// Helper para buscar columna "Peso GRD Medio (Todos)" - SOLO esta columna exacta
+function findPesoGRDMedioTodos(row: RawRow): number | null {
+  const todasLasKeys = Object.keys(row);
+  const episodioCmdb = cleanString(row['Episodio CMBD']);
+  
+  console.log(`🔍 [findPesoGRDMedioTodos] Buscando EXACTAMENTE "Peso GRD Medio (Todos)" para episodio: ${episodioCmdb}`);
+  
+  // PRIMERO: Buscar nombre exacto (case-sensitive primero)
+  if ('Peso GRD Medio (Todos)' in row) {
+    const value = row['Peso GRD Medio (Todos)'];
+    console.log(`   ✅ ENCONTRADO (exacto case-sensitive): "Peso GRD Medio (Todos)" = "${value}"`);
+    if (isNumeric(value)) {
+      const numValue = parseFloat(String(value));
+      if (!isNaN(numValue) && isFinite(numValue)) {
+        console.log(`   ✅ VALOR: ${numValue}`);
+        return numValue;
+      }
+    }
+  }
+  
+  // SEGUNDO: Buscar con normalización estricta (solo variaciones de espacios y case)
+  for (const key of todasLasKeys) {
+    if (key) {
+      // Normalizar: quitar espacios extra, pero mantener la estructura
+      const normalized = key.trim().replace(/\s+/g, ' ');
+      // Comparar normalizado (case-insensitive) pero estructura exacta
+      const targetNormalized = 'Peso GRD Medio (Todos)'.trim().replace(/\s+/g, ' ');
+      
+      if (normalized.toLowerCase() === targetNormalized.toLowerCase()) {
+        const value = row[key];
+        console.log(`   ✅ ENCONTRADO (normalizado): "${key}" = "${value}"`);
+        if (isNumeric(value)) {
+          const numValue = parseFloat(String(value));
+          if (!isNaN(numValue) && isFinite(numValue)) {
+            console.log(`   ✅ VALOR: ${numValue}`);
+            return numValue;
+          }
+        }
+      }
+    }
+  }
+  
+  // Mostrar TODAS las columnas que contienen "peso" o "grd" para debugging
+  const columnasPeso = todasLasKeys.filter(k => {
+    const normalized = k.toLowerCase().trim();
+    return normalized.includes('peso') || normalized.includes('grd');
+  });
+  
+  console.log(`   ❌ NO se encontró "Peso GRD Medio (Todos)". Columnas relacionadas (${columnasPeso.length}):`);
+  columnasPeso.forEach(col => {
+    const valor = row[col];
+    console.log(`      "${col}" = "${valor}" (numérico: ${isNumeric(valor)})`);
+  });
+  
+  return null;
+}
+
 // ===================================================================
 // =================== ¡MODIFICACIÓN 1: validateRow! ===================
 // ===================================================================
@@ -2142,11 +2219,35 @@ async function processRow(row: RawRow, rowIndex?: number) {
     montoRn: isNumeric(row['Facturación Total del episodio'])
       ? parseFloat(row['Facturación Total del episodio'])
       : 0,
-    // Ojo: aquí seguimos usando la columna histórica "Peso Medio [Norma IR]"
-    // Si en algún momento migran a "Peso GRD Medio (Todos)", se puede extender
-    pesoGrd: isNumeric(row['Peso Medio [Norma IR]'])
-      ? parseFloat(row['Peso Medio [Norma IR]'])
-      : 0,
+    // Mapear pesoGrd SOLO desde "Peso GRD Medio (Todos)" - sin validaciones, sin fallbacks
+    pesoGrd: (() => {
+      const episodioCmdb = cleanString(row['Episodio CMBD']);
+      
+      // PRIMERO: Intentar nombre exacto
+      if ('Peso GRD Medio (Todos)' in row) {
+        const value = row['Peso GRD Medio (Todos)'];
+        console.log(`📊 [MAPEO pesoGrd] Episodio ${episodioCmdb}: Columna exacta "Peso GRD Medio (Todos)" = "${value}"`);
+        if (isNumeric(value)) {
+          const numValue = parseFloat(String(value));
+          if (!isNaN(numValue) && isFinite(numValue)) {
+            console.log(`   ✅ Usando valor: ${numValue}`);
+            return numValue;
+          }
+        }
+      }
+      
+      // SEGUNDO: Búsqueda flexible
+      console.log(`📊 [MAPEO pesoGrd] Episodio ${episodioCmdb}: No se encontró nombre exacto, buscando flexible...`);
+      const pesoGRD = findPesoGRDMedioTodos(row);
+      
+      if (pesoGRD !== null) {
+        console.log(`   ✅ Valor encontrado (flexible): ${pesoGRD}`);
+        return pesoGRD;
+      }
+      
+      console.log(`   ❌ NO se encontró "Peso GRD Medio (Todos)" para episodio ${episodioCmdb}. Retornando null.`);
+      return null;
+    })(),
     inlierOutlier: cleanString(row['IR Alta Inlier / Outlier']) || '',
     diasEstada: isNumeric(row['Estancia real del episodio'])
       ? parseInt(String(row['Estancia real del episodio']), 10)
@@ -2226,6 +2327,18 @@ async function processRow(row: RawRow, rowIndex?: number) {
   console.log(`📦 Episodio creado - ID: ${episodioCreado.id}, Episodio: ${episodioCreado.episodioCmdb}`);
   console.log(`   Convenio en objeto creado: "${episodioCreado.convenio || 'null/undefined'}"`);
   console.log(`   Precio base tramo guardado: ${episodioCreado.precioBaseTramo ?? 'null'}`);
+  console.log(`   ⚠️ pesoGrd guardado en BD: ${episodioCreado.pesoGrd ?? 'null'} (tipo: ${typeof episodioCreado.pesoGrd})`);
+  console.log(`   ⚠️ peso en Grd: ${episodioCreado.grd?.peso ?? 'null'} (tipo: ${typeof episodioCreado.grd?.peso})`);
+  
+  // Verificar qué valor se usó del archivo maestro
+  const pesoGRDEnArchivo = findPesoGRDMedioTodos(row);
+  const pesoMedioNormaEnArchivo = isNumeric(row['Peso Medio [Norma IR]']) ? parseFloat(row['Peso Medio [Norma IR]']) : null;
+  console.log(`   📊 VALORES EN ARCHIVO MAESTRO:`);
+  console.log(`      - "Peso GRD Medio (Todos)": ${pesoGRDEnArchivo ?? 'NO ENCONTRADO'}`);
+  console.log(`      - "Peso Medio [Norma IR]": ${pesoMedioNormaEnArchivo ?? 'NO ENCONTRADO'}`);
+  console.log(`   📊 VALORES GUARDADOS EN BD:`);
+  console.log(`      - episodio.pesoGrd: ${episodioCreado.pesoGrd ?? 'null'}`);
+  console.log(`      - grd.peso: ${episodioCreado.grd?.peso ?? 'null'}`);
   
   return episodioCreado;
 }
@@ -2418,7 +2531,8 @@ router.post('/episodios/import', requireAuth, upload.single('file'), async (req:
           fechaAlta: e.fechaAlta ? e.fechaAlta.toISOString().split('T')[0] : '', // <-- ANTES DECÍA [MAIN]
           servicioAlta: e.servicioAlta || '',
           grdCodigo: e.grd?.codigo || '',
-          peso: toNumber(e.pesoGrd),
+          peso: normalized.peso || null, // "Peso Medio [Norma IR]" - viene del modelo Grd
+          pesoGrd: normalized.pesoGrd || null, // "Peso GRD Medio (Todos)" - viene del modelo Episodio
           montoRN: toNumber(e.montoRn),
           inlierOutlier: normalized.inlierOutlier, // Campo calculado automáticamente: "Outlier Superior" o "Inlier"
           enNorma: normalized.enNorma || null, // Campo calculado: "Si" si es Inlier, "No" si es Outlier, null si inlierOutlier está vacío

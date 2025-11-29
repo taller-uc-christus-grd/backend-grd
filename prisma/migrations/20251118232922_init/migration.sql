@@ -1,2 +1,3 @@
 -- AlterTable
-ALTER TABLE "Episodio" ADD COLUMN     "validado" BOOLEAN;
+-- Esta migración está comentada porque la columna "validado" ya fue agregada en la migración 20251118225017_add_convenio_to_episodios
+-- ALTER TABLE "Episodio" ADD COLUMN     "validado" BOOLEAN;

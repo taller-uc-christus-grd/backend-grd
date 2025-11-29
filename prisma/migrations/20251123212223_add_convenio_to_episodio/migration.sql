@@ -1,2 +1,3 @@
 -- AlterTable
-ALTER TABLE "Episodio" ADD COLUMN     "convenio" VARCHAR(20);
+-- Esta migración está comentada porque la columna "convenio" ya fue agregada en la migración 20251118225017_add_convenio_to_episodios
+-- ALTER TABLE "Episodio" ADD COLUMN     "convenio" VARCHAR(20);
