@@ -582,19 +582,46 @@ router.get('/episodios/final', requireAuth, async (req: Request, res: Response) 
       prisma.episodio.count({ where }),
     ]);
 
-    // Recalcular precioBaseTramo para episodios que lo necesiten (lazy calculation)
+    // Recalcular precioBaseTramo, valorGRD y montoFinal para todos los episodios
+    // Esto asegura que siempre se usen los precios más recientes de convenios
     for (const episode of episodes) {
-      if (!episode.precioBaseTramo && episode.convenio) {
+      if (episode.convenio) {
         const pesoGRD = episode.pesoGrd ? Number(episode.pesoGrd) : null;
         const precioCalculado = await obtenerPrecioBaseTramo(episode.convenio, pesoGRD);
+        
         if (precioCalculado !== null) {
-          // Actualizar en la base de datos para evitar recalcular en cada consulta
-          await prisma.episodio.update({
-            where: { id: episode.id },
-            data: { precioBaseTramo: precioCalculado }
-          });
+          // Recalcular valorGRD y montoFinal
+          const valorGRDCalculado = calcularValorGRD(pesoGRD, precioCalculado);
+          const montoAT = episode.montoAt ? Number(episode.montoAt) : 0;
+          const pagoOutlierSup = episode.pagoOutlierSuperior ? Number(episode.pagoOutlierSuperior) : 0;
+          const pagoDemora = episode.pagoDemoraRescate ? Number(episode.pagoDemoraRescate) : 0;
+          const montoFinalCalculado = calcularMontoFinal(valorGRDCalculado, montoAT, pagoOutlierSup, pagoDemora);
+          
+          // Solo actualizar en BD si los valores cambiaron (para evitar escrituras innecesarias)
+          const precioActual = episode.precioBaseTramo ? Number(episode.precioBaseTramo) : null;
+          const valorGRDActual = episode.valorGrd ? Number(episode.valorGrd) : null;
+          const montoFinalActual = episode.montoFinal ? Number(episode.montoFinal) : null;
+          
+          const necesitaActualizar = 
+            precioActual !== precioCalculado ||
+            Math.abs((valorGRDActual ?? 0) - valorGRDCalculado) > 0.01 ||
+            Math.abs((montoFinalActual ?? 0) - montoFinalCalculado) > 0.01;
+          
+          if (necesitaActualizar) {
+            await prisma.episodio.update({
+              where: { id: episode.id },
+              data: {
+                precioBaseTramo: precioCalculado,
+                valorGrd: valorGRDCalculado,
+                montoFinal: montoFinalCalculado
+              }
+            });
+          }
+          
           // Actualizar el objeto en memoria para esta respuesta
           episode.precioBaseTramo = precioCalculado as any;
+          episode.valorGrd = valorGRDCalculado as any;
+          episode.montoFinal = montoFinalCalculado as any;
         }
       }
     }

@@ -279,11 +279,177 @@ router.patch('/precios-convenios/:id', requireAuth, requireRole(['finanzas', 'ge
       }
     }
 
+    // Obtener el precio antes de actualizar para saber qué cambió
+    const precioAnterior = await prisma.precioConvenio.findUnique({ where: { id } });
+    
     // Actualizar el precio de convenio
     const precioConvenio = await prisma.precioConvenio.update({
       where: { id },
       data: updateData,
     });
+
+    // Si cambió el precio o el convenio/tramo, actualizar episodios relacionados
+    const precioCambio = value.precio !== undefined && precioAnterior && precioAnterior.precio !== precioConvenio.precio;
+    const convenioCambio = value.convenio !== undefined && precioAnterior && precioAnterior.convenio !== precioConvenio.convenio;
+    const tramoCambio = value.tramo !== undefined && precioAnterior && precioAnterior.tramo !== precioConvenio.tramo;
+    
+    if (precioCambio || convenioCambio || tramoCambio) {
+      try {
+        // Buscar episodios que usen este convenio
+        const convenioParaBuscar = precioConvenio.convenio || precioAnterior?.convenio;
+        
+        if (convenioParaBuscar) {
+          const convenioNormalizado = convenioParaBuscar.trim().toUpperCase();
+          const conveniosConTramos = ['FNS012', 'FNS026'];
+          const usaTramos = conveniosConTramos.includes(convenioNormalizado);
+          
+          // Construir condición de búsqueda
+          const whereCondition: any = {
+            convenio: convenioNormalizado
+          };
+          
+          // Si el convenio usa tramos, necesitamos calcular el tramo para cada episodio
+          // Buscamos todos los episodios del convenio y luego filtramos por tramo
+          const episodios = await prisma.episodio.findMany({
+            where: whereCondition,
+            select: {
+              id: true,
+              convenio: true,
+              pesoGrd: true,
+              precioBaseTramo: true,
+              valorGrd: true,
+              montoAt: true,
+              pagoOutlierSuperior: true,
+              pagoDemoraRescate: true,
+              montoFinal: true
+            }
+          });
+          
+          console.log(`🔄 Actualizando ${episodios.length} episodios para convenio ${convenioNormalizado}`);
+          
+          // Función auxiliar para calcular tramo (misma lógica que en episodios.routes.ts)
+          const calcularTramo = (pesoGRD: number | null | undefined): 'T1' | 'T2' | 'T3' | null => {
+            if (pesoGRD === null || pesoGRD === undefined) return null;
+            if (pesoGRD >= 0 && pesoGRD <= 1.5) return 'T1';
+            if (pesoGRD > 1.5 && pesoGRD <= 2.5) return 'T2';
+            if (pesoGRD > 2.5) return 'T3';
+            return null;
+          };
+          
+          // Función auxiliar para obtener precio base
+          const obtenerPrecioBaseTramo = async (convenio: string, pesoGRD: number | null): Promise<number | null> => {
+            if (usaTramos) {
+              const tramo = calcularTramo(pesoGRD);
+              if (!tramo) return null;
+              
+              // Buscar el precio más reciente para este convenio y tramo
+              const precioRegistro = await prisma.precioConvenio.findFirst({
+                where: {
+                  convenio: convenioNormalizado,
+                  tramo: tramo
+                },
+                orderBy: { createdAt: 'desc' }
+              });
+              
+              if (precioRegistro && precioRegistro.precio !== null && precioRegistro.precio !== undefined) {
+                const precio = typeof precioRegistro.precio === 'number' 
+                  ? precioRegistro.precio 
+                  : parseFloat(String(precioRegistro.precio));
+                return isNaN(precio) || !isFinite(precio) ? null : precio;
+              }
+              return null;
+            } else {
+              // Precio único
+              const precioRegistro = await prisma.precioConvenio.findFirst({
+                where: { convenio: convenioNormalizado },
+                orderBy: { createdAt: 'desc' }
+              });
+              
+              if (precioRegistro && precioRegistro.precio !== null && precioRegistro.precio !== undefined) {
+                const precio = typeof precioRegistro.precio === 'number' 
+                  ? precioRegistro.precio 
+                  : parseFloat(String(precioRegistro.precio));
+                return isNaN(precio) || !isFinite(precio) ? null : precio;
+              }
+              return null;
+            }
+          };
+          
+          // Función para calcular valorGRD
+          const calcularValorGRD = (peso: number | null, precioBaseTramo: number | null): number => {
+            const pesoNum = peso ?? 0;
+            const precioNum = precioBaseTramo ?? 0;
+            if (pesoNum === 0 || precioNum === 0) return 0;
+            return pesoNum * precioNum;
+          };
+          
+          // Función para calcular montoFinal
+          const calcularMontoFinal = (
+            valorGRD: number | null,
+            montoAT: number | null,
+            pagoOutlierSup: number | null,
+            pagoDemora: number | null
+          ): number => {
+            return (valorGRD ?? 0) + (montoAT ?? 0) + (pagoOutlierSup ?? 0) + (pagoDemora ?? 0);
+          };
+          
+          // Actualizar cada episodio
+          let episodiosActualizados = 0;
+          const tramoPrecioActualizado = precioConvenio.tramo; // Tramo del precio que se actualizó
+          
+          for (const episodio of episodios) {
+            try {
+              const pesoGRD = episodio.pesoGrd ? Number(episodio.pesoGrd) : null;
+              
+              // Si el convenio usa tramos, solo actualizar episodios del tramo específico que se actualizó
+              if (usaTramos && tramoPrecioActualizado) {
+                const tramoEpisodio = calcularTramo(pesoGRD);
+                
+                // Solo actualizar si el tramo del episodio coincide con el tramo del precio actualizado
+                if (tramoEpisodio !== tramoPrecioActualizado) {
+                  continue; // Saltar este episodio, no corresponde a este tramo
+                }
+              }
+              
+              // Recalcular precioBaseTramo usando el precio más reciente
+              const nuevoPrecioBaseTramo = await obtenerPrecioBaseTramo(convenioNormalizado, pesoGRD);
+              
+              if (nuevoPrecioBaseTramo !== null) {
+                // Recalcular valorGRD
+                const nuevoValorGRD = calcularValorGRD(pesoGRD, nuevoPrecioBaseTramo);
+                
+                // Recalcular montoFinal
+                const nuevoMontoFinal = calcularMontoFinal(
+                  nuevoValorGRD,
+                  episodio.montoAt ? Number(episodio.montoAt) : null,
+                  episodio.pagoOutlierSuperior ? Number(episodio.pagoOutlierSuperior) : null,
+                  episodio.pagoDemoraRescate ? Number(episodio.pagoDemoraRescate) : null
+                );
+                
+                // Actualizar el episodio
+                await prisma.episodio.update({
+                  where: { id: episodio.id },
+                  data: {
+                    precioBaseTramo: nuevoPrecioBaseTramo,
+                    valorGrd: nuevoValorGRD,
+                    montoFinal: nuevoMontoFinal
+                  }
+                });
+                
+                episodiosActualizados++;
+              }
+            } catch (error: any) {
+              console.error(`❌ Error actualizando episodio ${episodio.id}:`, error?.message || error);
+            }
+          }
+          
+          console.log(`✅ ${episodiosActualizados} episodios actualizados para convenio ${convenioNormalizado}`);
+        }
+      } catch (error: any) {
+        console.error('❌ Error al actualizar episodios relacionados:', error);
+        // No fallar la respuesta, solo loguear el error
+      }
+    }
 
     // Formatear respuesta (manejar fechas null)
     res.json({
