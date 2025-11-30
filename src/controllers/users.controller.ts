@@ -12,6 +12,7 @@ export async function listUsers(req: Request, res: Response) {
         email: true,
         rol: true,
         activo: true,
+        lastAccessAt: true,
         createdAt: true,
         updatedAt: true
       }
@@ -62,6 +63,7 @@ export async function createUser(req: Request, res: Response) {
         email: true,
         rol: true,
         activo: true,
+        lastAccessAt: true,
         createdAt: true
       }
     });
@@ -108,6 +110,7 @@ export async function updateUser(req: Request, res: Response) {
         email: true,
         rol: true,
         activo: true,
+        lastAccessAt: true,
         updatedAt: true
       }
     });
@@ -172,6 +175,7 @@ export async function toggleUserStatus(req: Request, res: Response) {
         email: true,
         rol: true,
         activo: true,
+        lastAccessAt: true,
         updatedAt: true
       }
     });

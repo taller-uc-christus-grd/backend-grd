@@ -27,12 +27,18 @@ app.set('trust proxy', 1);
 // CORS configuration - DEBE IR ANTES DE HELMET
 const corsOrigins = process.env.CORS_ORIGIN 
   ? process.env.CORS_ORIGIN.split(',').map(s => s.trim())
-  : ['http://localhost:5173', 'http://localhost:3000']; // Default para desarrollo local
+  : ['http://localhost:5173', 'http://localhost:5174', 'http://localhost:3000']; // Default para desarrollo local
 
 app.use(cors({ 
   origin: (origin, callback) => {
     // Permitir peticiones sin origen (mobile apps, Postman, etc.)
     if (!origin) return callback(null, true);
+    
+    // En desarrollo, permitir cualquier puerto de localhost
+    const isDevelopment = process.env.NODE_ENV !== 'production';
+    if (isDevelopment && origin.startsWith('http://localhost:')) {
+      return callback(null, true);
+    }
     
     // Verificar si el origen está en la lista permitida
     if (corsOrigins.includes('*') || corsOrigins.includes(origin)) {
