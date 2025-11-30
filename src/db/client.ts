@@ -24,7 +24,11 @@ prisma.$connect()
   });
 
 // Manejar desconexión graceful
+let isShuttingDown = false;
 const gracefulShutdown = async () => {
+  if (isShuttingDown) return; // Evitar múltiples desconexiones
+  isShuttingDown = true;
+  
   try {
     await prisma.$disconnect();
     console.log('👋 Desconectado de la base de datos');
@@ -33,6 +37,6 @@ const gracefulShutdown = async () => {
   }
 };
 
+// Solo manejar señales de terminación, no beforeExit (se dispara incorrectamente)
 process.on('SIGINT', gracefulShutdown);
 process.on('SIGTERM', gracefulShutdown);
-process.on('beforeExit', gracefulShutdown);

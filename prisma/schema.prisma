@@ -14,10 +14,13 @@ model Usuario {
   passwordHash String
   rol          String       @db.VarChar(50)
   activo       Boolean      @default(true)
+  lastAccessAt DateTime?    // Fecha y hora del último acceso (login exitoso)
   createdAt    DateTime     @default(now())
   updatedAt    DateTime     @updatedAt
-  logs         LogSistema[] @relation("UsuarioLog")
-  respaldos    Respaldo[]   @relation("UsuarioRespaldo")
+
+  // Relaciones
+  logs      LogSistema[] @relation("UsuarioLog")
+  respaldos Respaldo[]   @relation("UsuarioRespaldo")
 }
 
 model Paciente {
