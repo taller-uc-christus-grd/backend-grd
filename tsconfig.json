@@ -8,7 +8,7 @@
     "target": "ES2020",
     "module": "commonjs",
     "moduleResolution": "node",
-    "types": ["node"],
+    "types": ["node", "jest", "@types/jest"],
 
     /* === Compatibilidad y buenas prácticas === */
     "strict": true,
@@ -24,5 +24,10 @@
     "declarationMap": true
   },
   "include": ["src/**/*"],
-  "exclude": ["node_modules", "dist"]
+  "exclude": ["node_modules", "dist"],
+  "ts-node": {
+    "compilerOptions": {
+      "module": "commonjs"
+    }
+  }
 }
