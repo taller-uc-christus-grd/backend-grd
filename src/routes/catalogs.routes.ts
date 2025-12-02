@@ -345,15 +345,53 @@ router.post('/catalogs/norma-minsal/import', requireAuth, (req: Request, res: Re
         'Punto corte superior'
       ]));
       
+      // Buscar percentil 25
+      const p25 = parseDecimal(getColumnValue([
+        'Percentil 25',
+        'Percentil25',
+        'P25',
+        'PERCENTIL 25',
+        'percentil 25',
+        'Percentil 25 (días)'
+      ]));
+      
+      // Buscar percentil 50 - CRÍTICO para cálculo de outlier superior
+      const p50 = parseDecimal(getColumnValue([
+        'Percentil 50',
+        'Percentil50',
+        'P50',
+        'PERCENTIL 50',
+        'percentil 50',
+        'Percentil 50 (días)',
+        'Mediana',
+        'MEDIANA',
+        'Mediana (días)'
+      ]));
+      
+      // Buscar percentil 75
+      const p75 = parseDecimal(getColumnValue([
+        'Percentil 75',
+        'Percentil75',
+        'P75',
+        'PERCENTIL 75',
+        'percentil 75',
+        'Percentil 75 (días)'
+      ]));
+      
       // Log para los primeros 5 registros para verificar que se están encontrando los valores
       if (index < 5) {
         console.log(`📊 Procesando fila ${index + 1} - GRD: ${codigo}`, {
           peso,
           pci,
           pcs,
+          p25,
+          p50,
+          p75,
           tienePeso: peso > 0,
           tienePCI: pci > 0 || pci !== 0,
           tienePCS: pcs > 0 || pcs !== 0,
+          tieneP50: p50 > 0 || p50 !== 0,
+          tieneP75: p75 > 0 || p75 !== 0,
           rowKeys: Object.keys(row).slice(0, 10), // Primeras 10 columnas para debug
         });
       }
@@ -403,6 +441,9 @@ router.post('/catalogs/norma-minsal/import', requireAuth, (req: Request, res: Re
         peso: peso,
         puntoCorteInf: pci,
         puntoCorteSup: pcs,
+        percentil25: p25,
+        percentil50: p50,
+        percentil75: p75,
         precioBaseTramo: precioBaseEjemplo,
       };
 
@@ -416,7 +457,7 @@ router.post('/catalogs/norma-minsal/import', requireAuth, (req: Request, res: Re
         // Verificar que los valores se guardaron correctamente
         const grdVerificado = await prisma.grd.findUnique({
           where: { codigo: codigo },
-          select: { codigo: true, puntoCorteInf: true, puntoCorteSup: true, peso: true },
+          select: { codigo: true, puntoCorteInf: true, puntoCorteSup: true, peso: true, percentil25: true, percentil50: true, percentil75: true },
         });
 
         // Log para los primeros 5 GRDs para verificar que se guardaron
@@ -426,6 +467,9 @@ router.post('/catalogs/norma-minsal/import', requireAuth, (req: Request, res: Re
             puntoCorteInf: grdVerificado?.puntoCorteInf,
             puntoCorteSup: grdVerificado?.puntoCorteSup,
             peso: grdVerificado?.peso,
+            percentil25: grdVerificado?.percentil25,
+            percentil50: grdVerificado?.percentil50,
+            percentil75: grdVerificado?.percentil75,
             tipoPuntoCorteInf: typeof grdVerificado?.puntoCorteInf,
             tipoPuntoCorteSup: typeof grdVerificado?.puntoCorteSup,
           });
@@ -437,6 +481,9 @@ router.post('/catalogs/norma-minsal/import', requireAuth, (req: Request, res: Re
           peso: peso,
           puntoCorteInf: pci,
           puntoCorteSup: pcs,
+          percentil25: p25,
+          percentil50: p50,
+          percentil75: p75,
         });
       } catch (e: any) {
         console.error(`Error procesando GRD ${codigo}:`, e.message);
@@ -481,15 +528,16 @@ router.post('/catalogs/norma-minsal/import', requireAuth, (req: Request, res: Re
       for (const record of primeros5) {
         const grdVerificado = await prisma.grd.findUnique({
           where: { codigo: record.codigo },
-          select: { codigo: true, puntoCorteInf: true, puntoCorteSup: true, peso: true },
+          select: { codigo: true, puntoCorteInf: true, puntoCorteSup: true, peso: true, percentil25: true, percentil50: true, percentil75: true },
         });
         if (grdVerificado) {
           console.log(`✅ GRD ${record.codigo} verificado en BD:`, {
             puntoCorteInf: grdVerificado.puntoCorteInf,
             puntoCorteSup: grdVerificado.puntoCorteSup,
             peso: grdVerificado.peso,
-            tipoPuntoCorteInf: typeof grdVerificado.puntoCorteInf,
-            tipoPuntoCorteSup: typeof grdVerificado.puntoCorteSup,
+            percentil25: grdVerificado.percentil25,
+            percentil50: grdVerificado.percentil50,
+            percentil75: grdVerificado.percentil75,
           });
         } else {
           console.error(`❌ GRD ${record.codigo} NO encontrado en BD después de guardar!`);

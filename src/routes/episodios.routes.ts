@@ -370,11 +370,18 @@ async function calcularPagoDemoraRescate(params: {
     if (conv === 'FNS012' || conv === 'FNS026' || conv === 'FNS019') {
       let diasP75: number | null = null;
       
-      // Opción 1: Obtener desde Grd.puntoCorteSup
+      // Opción 1: Priorizar percentil75 desde GRD si está disponible
       if (grdId) {
         const grd = await prisma.grd.findUnique({ where: { id: grdId } });
-        if (grd && grd.puntoCorteSup) {
-          diasP75 = Number(grd.puntoCorteSup);
+        if (grd) {
+          // Priorizar percentil75 si está disponible
+          if (grd.percentil75) {
+            diasP75 = Number(grd.percentil75);
+            console.log(`✅ ${conv}: Usando percentil75 desde GRD: ${diasP75}`);
+          } else if (grd.puntoCorteSup) {
+            diasP75 = Number(grd.puntoCorteSup);
+            console.log(`ℹ️ ${conv}: Usando puntoCorteSup como fallback: ${diasP75}`);
+          }
         }
       }
       
@@ -428,9 +435,9 @@ async function calcularPagoOutlierSuperior(params: {
   pesoGrd?: number | null;
   precioBase?: number | null;
   grdId?: number | null;
-  esFueraDeNorma?: boolean;
+  inlierOutlier?: string | null;
 }): Promise<number> {
-  const { convenio, diasEstada, pesoGrd, precioBase, grdId, esFueraDeNorma } = params;
+  const { convenio, diasEstada, pesoGrd, precioBase, grdId, inlierOutlier } = params;
   
   const conv = (convenio || '').toString().trim().toUpperCase();
   
@@ -439,19 +446,22 @@ async function calcularPagoOutlierSuperior(params: {
     return 0;
   }
   
-  // Solo aplicar si el episodio está fuera de norma (outlier superior)
+  // Determinar si es outlier superior basándose en inlierOutlier
+  const esOutlierSuperior = inlierOutlier === 'Outlier Superior';
+  
   console.log(`🔍 calcularPagoOutlierSuperior - Verificando condiciones:`, {
     convenio: conv,
     esFNS012: conv === 'FNS012',
-    esFueraDeNorma,
+    esOutlierSuperior,
+    inlierOutlier,
     diasEstada,
     pesoGrd,
     precioBase,
     grdId
   });
   
-  if (!esFueraDeNorma) {
-    console.log(`ℹ️ FNS012: No se calcula pago outlier porque esFueraDeNorma = ${esFueraDeNorma}`);
+  if (!esOutlierSuperior) {
+    console.log(`ℹ️ FNS012: No se calcula pago outlier porque inlierOutlier = ${inlierOutlier} (no es "Outlier Superior")`);
     return 0;
   }
   
@@ -459,14 +469,23 @@ async function calcularPagoOutlierSuperior(params: {
     // Obtener datos del GRD
     let puntoCorteSuperíor: number | null = null;
     let percentil50: number | null = null;
+    let percentil75: number | null = null;
     
     if (grdId) {
       const grd = await prisma.grd.findUnique({ where: { id: grdId } });
       if (grd) {
         if (grd.puntoCorteSup) puntoCorteSuperíor = Number(grd.puntoCorteSup);
-        // NOTA: El percentil 50 NO es puntoCorteInf, debe obtenerse de ConfiguracionSistema o de otra fuente
-        // Por ahora, intentamos obtenerlo de ConfiguracionSistema primero
-        console.log(`📊 GRD encontrado: puntoCorteSup=${puntoCorteSuperíor}, puntoCorteInf=${grd.puntoCorteInf}`);
+        // Obtener percentil50 desde GRD (prioridad)
+        if (grd.percentil50) percentil50 = Number(grd.percentil50);
+        // Obtener percentil75 desde GRD (prioridad)
+        if (grd.percentil75) percentil75 = Number(grd.percentil75);
+        
+        console.log(`📊 GRD encontrado:`, {
+          puntoCorteSup: puntoCorteSuperíor,
+          percentil50: percentil50,
+          percentil75: percentil75,
+          puntoCorteInf: grd.puntoCorteInf
+        });
       }
     }
     
@@ -478,8 +497,8 @@ async function calcularPagoOutlierSuperior(params: {
       if (cfgSup && cfgSup.valor) puntoCorteSuperíor = parseFloat(cfgSup.valor);
     }
     
-    // Obtener percentil 50 desde ConfiguracionSistema (NO usar puntoCorteInf como percentil 50)
-    if (percentil50 === null) {
+    // Fallback: Si no hay percentil50 en GRD, intentar desde ConfiguracionSistema
+    if (percentil50 === null || percentil50 <= 0) {
       const cfgP50 = await prisma.configuracionSistema.findUnique({
         where: { clave: 'percentil50' }
       });
@@ -487,9 +506,23 @@ async function calcularPagoOutlierSuperior(params: {
         percentil50 = parseFloat(cfgP50.valor);
         console.log(`✅ Percentil 50 obtenido de ConfiguracionSistema: ${percentil50}`);
       } else {
-        // Fallback: Si no hay configuración, usar un valor por defecto o intentar calcularlo
-        // Por ahora, si no hay percentil50 configurado, no podemos calcular el pago outlier
-        console.warn('⚠️ FNS012: percentil50 no disponible en ConfiguracionSistema');
+        console.warn('⚠️ FNS012: percentil50 no disponible ni en GRD ni en ConfiguracionSistema');
+      }
+    }
+    
+    // Fallback: Si no hay percentil75 en GRD, usar puntoCorteSup
+    if (percentil75 === null || percentil75 <= 0) {
+      if (puntoCorteSuperíor && puntoCorteSuperíor > 0) {
+        percentil75 = puntoCorteSuperíor;
+        console.log(`ℹ️ Usando puntoCorteSup como percentil75: ${percentil75}`);
+      } else {
+        // Último fallback: ConfiguracionSistema
+        const cfgP75 = await prisma.configuracionSistema.findUnique({
+          where: { clave: 'diasPercentil75' }
+        });
+        if (cfgP75 && cfgP75.valor) {
+          percentil75 = parseFloat(cfgP75.valor);
+        }
       }
     }
     
@@ -502,6 +535,11 @@ async function calcularPagoOutlierSuperior(params: {
     if (percentil50 === null || percentil50 <= 0) {
       console.warn('⚠️ FNS012: percentil50 no disponible - no se puede calcular pago outlier');
       return 0;
+    }
+    
+    if (percentil75 === null || percentil75 <= 0) {
+      console.warn('⚠️ FNS012: percentil75 no disponible, usando 1');
+      percentil75 = 1;
     }
     
     // Validar parámetros
@@ -527,26 +565,10 @@ async function calcularPagoOutlierSuperior(params: {
       return 0;
     }
     
-    // Obtener días percentil 75 (normalmente igual a puntoCorteSuperior)
-    let diasPercentil75 = puntoCorteSuperíor;
-    
-    // Fallback desde ConfiguracionSistema si es diferente
-    const cfgP75 = await prisma.configuracionSistema.findUnique({
-      where: { clave: 'diasPercentil75' }
-    });
-    if (cfgP75 && cfgP75.valor) {
-      diasPercentil75 = parseFloat(cfgP75.valor);
-    }
-    
-    if (diasPercentil75 <= 0) {
-      console.warn('⚠️ FNS012 Outlier: diasPercentil75 inválido, usando 1');
-      diasPercentil75 = 1;
-    }
-    
     // Aplicar fórmula: (Días post carencia × Peso GRD × Precio Base) / Días percentil 75
-    const pagoOutlier = (diasPostCarencia * peso * precio) / diasPercentil75;
+    const pagoOutlier = (diasPostCarencia * peso * precio) / percentil75;
     
-    console.log(`✅ FNS012 Outlier: (${diasPostCarencia} × ${peso} × ${precio}) / ${diasPercentil75} = ${pagoOutlier}`);
+    console.log(`✅ FNS012 Outlier: (${diasPostCarencia} × ${peso} × ${precio}) / ${percentil75} = ${pagoOutlier}`);
     
     return pagoOutlier;
   } catch (err) {
@@ -2292,7 +2314,7 @@ router.patch('/episodios/:id',
       pesoGrd: peso,
       precioBase: precioBaseTramoParaCalculo,
       grdId: episodio.grdId ?? null,
-      esFueraDeNorma: esOutlierSuperior
+      inlierOutlier: inlierOutlierCalculado
     });
 
     // IMPORTANTE: SIEMPRE actualizar pagoOutlierSuperior (solo FNS012 si está fuera de norma)

@@ -42,6 +42,9 @@ model Grd {
   precioBaseTramo Decimal?   @db.Decimal(14, 2)
   puntoCorteInf   Decimal?
   puntoCorteSup   Decimal?
+  percentil25     Decimal?   @db.Decimal(10, 2)
+  percentil50     Decimal?   @db.Decimal(10, 2)
+  percentil75     Decimal?   @db.Decimal(10, 2)
   createdAt       DateTime   @default(now())
   episodios       Episodio[]
 }
