@@ -435,20 +435,20 @@ router.post('/catalogs/norma-minsal/import', requireAuth, (req: Request, res: Re
       const precioBaseEjemplo = (peso * 1000000) + 500000;
 
       // Preparar datos para upsert - Prisma acepta números directamente para Decimal
-      // Solo incluir percentiles si tienen valores válidos (para compatibilidad con BD sin migración)
-      const dataToUpsert: any = {
+      // NO incluir percentiles por ahora hasta que se ejecute la migración
+      // Esto evita errores si la BD no tiene esos campos aún
+      const dataToUpsert: Prisma.GrdUncheckedCreateInput = {
         codigo: codigo,
         descripcion: `Descripción de ${codigo}`, // El CSV no suele tener descripción
         peso: peso,
         puntoCorteInf: pci,
         puntoCorteSup: pcs,
         precioBaseTramo: precioBaseEjemplo,
+        // NOTA: Los percentiles se agregarán después de ejecutar la migración
+        // percentil25: p25 > 0 ? p25 : undefined,
+        // percentil50: p50 > 0 ? p50 : undefined,
+        // percentil75: p75 > 0 ? p75 : undefined,
       };
-      
-      // Agregar percentiles solo si tienen valores válidos (mayores a 0)
-      if (p25 > 0) dataToUpsert.percentil25 = p25;
-      if (p50 > 0) dataToUpsert.percentil50 = p50;
-      if (p75 > 0) dataToUpsert.percentil75 = p75;
 
       try {
         const grdActualizado = await prisma.grd.upsert({
@@ -458,53 +458,29 @@ router.post('/catalogs/norma-minsal/import', requireAuth, (req: Request, res: Re
         });
 
         // Verificar que los valores se guardaron correctamente
-        // Usar select básico primero para evitar errores si los campos de percentiles no existen aún
-        let grdVerificado: any;
-        try {
-          // Intentar con todos los campos primero (usar as any para evitar error de TypeScript si los campos no existen)
-          const selectWithPercentiles: any = { 
+        // Usar solo campos básicos hasta que se ejecute la migración
+        const grdVerificado = await prisma.grd.findUnique({
+          where: { codigo: codigo },
+          select: { 
             codigo: true, 
             puntoCorteInf: true, 
             puntoCorteSup: true, 
-            peso: true,
-            percentil25: true,
-            percentil50: true,
-            percentil75: true
-          };
-          grdVerificado = await prisma.grd.findUnique({
-            where: { codigo: codigo },
-            select: selectWithPercentiles,
-          });
-        } catch (e: any) {
-          // Si falla porque los campos no existen, usar solo los básicos
-          grdVerificado = await prisma.grd.findUnique({
-            where: { codigo: codigo },
-            select: { 
-              codigo: true, 
-              puntoCorteInf: true, 
-              puntoCorteSup: true, 
-              peso: true
-            },
-          });
-        }
+            peso: true
+          },
+        });
 
         // Log para los primeros 5 GRDs para verificar que se guardaron
         if (index < 5) {
-          const logData: any = {
+          console.log(`✅ GRD ${codigo} guardado/actualizado:`, {
             codigo: grdVerificado?.codigo,
             puntoCorteInf: grdVerificado?.puntoCorteInf,
             puntoCorteSup: grdVerificado?.puntoCorteSup,
             peso: grdVerificado?.peso,
             tipoPuntoCorteInf: typeof grdVerificado?.puntoCorteInf,
             tipoPuntoCorteSup: typeof grdVerificado?.puntoCorteSup,
-          };
-          // Solo agregar percentiles al log si existen
-          if ('percentil25' in (grdVerificado || {})) {
-            logData.percentil25 = (grdVerificado as any)?.percentil25;
-            logData.percentil50 = (grdVerificado as any)?.percentil50;
-            logData.percentil75 = (grdVerificado as any)?.percentil75;
-          }
-          console.log(`✅ GRD ${codigo} guardado/actualizado:`, logData);
+            // NOTA: Percentiles se agregarán después de ejecutar la migración
+            percentilesEncontrados: { p25, p50, p75 }
+          });
         }
 
         successRecords.push({
@@ -513,9 +489,10 @@ router.post('/catalogs/norma-minsal/import', requireAuth, (req: Request, res: Re
           peso: peso,
           puntoCorteInf: pci,
           puntoCorteSup: pcs,
-          percentil25: p25,
-          percentil50: p50,
-          percentil75: p75,
+          // NOTA: Percentiles se guardarán después de ejecutar la migración
+          // percentil25: p25,
+          // percentil50: p50,
+          // percentil75: p75,
         });
       } catch (e: any) {
         console.error(`Error procesando GRD ${codigo}:`, e.message);
@@ -558,49 +535,24 @@ router.post('/catalogs/norma-minsal/import', requireAuth, (req: Request, res: Re
       const primeros5 = successRecords.slice(0, 5);
       console.log('🔍 Verificando que los valores se guardaron correctamente...\n');
       for (const record of primeros5) {
-        try {
-          const grdVerificado = await prisma.grd.findUnique({
-            where: { codigo: record.codigo },
-            select: { 
-              codigo: true, 
-              puntoCorteInf: true, 
-              puntoCorteSup: true, 
-              peso: true
-            },
+        const grdVerificado = await prisma.grd.findUnique({
+          where: { codigo: record.codigo },
+          select: { 
+            codigo: true, 
+            puntoCorteInf: true, 
+            puntoCorteSup: true, 
+            peso: true
+          },
+        });
+        if (grdVerificado) {
+          console.log(`✅ GRD ${record.codigo} verificado en BD:`, {
+            puntoCorteInf: grdVerificado.puntoCorteInf,
+            puntoCorteSup: grdVerificado.puntoCorteSup,
+            peso: grdVerificado.peso,
+            // NOTA: Percentiles se agregarán después de ejecutar la migración
           });
-          if (grdVerificado) {
-            const logData: any = {
-              puntoCorteInf: grdVerificado.puntoCorteInf,
-              puntoCorteSup: grdVerificado.puntoCorteSup,
-              peso: grdVerificado.peso,
-            };
-            // Intentar leer percentiles si existen (puede fallar si la migración no se ejecutó)
-            try {
-              const selectWithPercentiles: any = { percentil25: true, percentil50: true, percentil75: true };
-              const grdConPercentiles = await prisma.grd.findUnique({
-                where: { codigo: record.codigo },
-                select: selectWithPercentiles,
-              });
-              if (grdConPercentiles) {
-                logData.percentil25 = (grdConPercentiles as any)?.percentil25;
-                logData.percentil50 = (grdConPercentiles as any)?.percentil50;
-                logData.percentil75 = (grdConPercentiles as any)?.percentil75;
-              }
-            } catch (e) {
-              // Los campos de percentiles no existen aún, ignorar
-            }
-            console.log(`✅ GRD ${record.codigo} verificado en BD:`, logData);
-          } else {
-            console.error(`❌ GRD ${record.codigo} NO encontrado en BD después de guardar!`);
-          }
-        } catch (e: any) {
-          // Si falla por campos que no existen, solo loguear los básicos
-          console.log(`⚠️ GRD ${record.codigo} verificado (algunos campos pueden no existir aún):`, {
-            codigo: record.codigo,
-            peso: record.peso,
-            puntoCorteInf: record.puntoCorteInf,
-            puntoCorteSup: record.puntoCorteSup,
-          });
+        } else {
+          console.error(`❌ GRD ${record.codigo} NO encontrado en BD después de guardar!`);
         }
       }
       console.log('\n');
