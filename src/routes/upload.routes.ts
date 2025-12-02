@@ -615,7 +615,7 @@ async function processRow(row: RawRow) {
   console.log(
     `✅ [UPLOAD] Episodio creado: ${cleanString(row['Episodio CMBD'])}, convenio: "${convenio || ''}"`
   );
-}
+}}
 
 // --- Endpoint de Carga (AHORA GUARDA EN DB) ---
 router.post('/upload', requireAuth, upload.single('file'), async (req: Request, res: Response) => {
