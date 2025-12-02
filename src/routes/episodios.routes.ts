@@ -1642,7 +1642,7 @@ const finanzasSchema = Joi.object({
     Joi.number().min(0),
     Joi.string().pattern(/^\d+(\.\d+)?$/).min(0)
   ).optional(), // Se ignora, se calcula automáticamente
-  documentacion: Joi.string().allow(null, '').optional(),
+  // documentacion NO es editable para finanzas - solo para codificador
 }).unknown(false); // No permitir campos desconocidos
 
 // Mapeo completo de campos del frontend a la base de datos para finanzas
@@ -1930,14 +1930,15 @@ router.patch('/episodios/:id',
     // Mapear campos del frontend a nombres de la base de datos
     const updateData: any = {};
     
-    // Mapeo común para campos compartidos (at, atDetalle) - usado por codificador y gestión
+    // Mapeo común para campos compartidos (at, atDetalle, precioBaseTramo) - usado por codificador y gestión
     const commonFieldMapping: Record<string, string> = {
       at: 'atSn',
       atDetalle: 'atDetalle', // Agregado para que gestión también pueda mapear atDetalle
+      precioBaseTramo: 'precioBaseTramo', // Agregado para que gestión pueda mapear precioBaseTramo
     };
     
     // Determinar qué mapeo usar según el rol
-    // Gestión usa el mismo mapeo que codificador para AT y AT Detalle
+    // Gestión usa el mismo mapeo que codificador para AT y AT Detalle, pero también necesita precioBaseTramo
     const fieldMappingToUse = (isCodificador || isGestion) ? codificadorFieldMapping : finanzasFieldMapping;
     
     for (const [key, value] of Object.entries(validatedValue)) {
