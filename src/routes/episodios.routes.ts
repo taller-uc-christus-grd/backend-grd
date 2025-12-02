@@ -2177,13 +2177,14 @@ router.patch('/episodios/:id',
     } else if (precioBaseTramoEditado && !necesitaRecalculo) {
       // Si viene precioBaseTramo en el request y NO necesita recálculo, guardar el valor editado manualmente
       // Esto permite a finanzas y gestión editar manualmente el precio base
-      precioBaseTramo = typeof updateData.precioBaseTramo === 'number' 
+      const precioEditado = typeof updateData.precioBaseTramo === 'number' 
         ? updateData.precioBaseTramo 
         : parseFloat(String(updateData.precioBaseTramo));
-      if (!isNaN(precioBaseTramo) && precioBaseTramo >= 0) {
-        updateData.precioBaseTramo = precioBaseTramo;
+      if (!isNaN(precioEditado) && isFinite(precioEditado) && precioEditado >= 0) {
+        precioBaseTramo = precioEditado;
+        updateData.precioBaseTramo = precioEditado;
         if (process.env.NODE_ENV === 'development') {
-          console.log(`✅ Precio base editado manualmente para episodio ${episodio.id}: ${precioBaseTramo} (guardado sin recalcular)`);
+          console.log(`✅ Precio base editado manualmente para episodio ${episodio.id}: ${precioEditado} (guardado sin recalcular)`);
         }
       } else {
         // Si el valor no es válido, eliminar del updateData y mantener el actual
@@ -2193,7 +2194,10 @@ router.patch('/episodios/:id',
     }
     
     // Usar el precio calculado para los cálculos siguientes
-    const precioBaseTramoParaCalculo = precioBaseTramo ?? 0;
+    // Asegurar que precioBaseTramo sea un número válido (no null) para los cálculos
+    const precioBaseTramoParaCalculo: number = (precioBaseTramo !== null && !isNaN(precioBaseTramo) && precioBaseTramo >= 0) 
+      ? precioBaseTramo 
+      : 0;
     const montoAT = updateData.montoAt !== undefined ? (updateData.montoAt ?? 0) : montoATActual;
     const pagoOutlierSup = updateData.pagoOutlierSuperior !== undefined ? (updateData.pagoOutlierSuperior ?? 0) : pagoOutlierSupActual;
     const pagoDemora = updateData.pagoDemoraRescate !== undefined ? (updateData.pagoDemoraRescate ?? 0) : pagoDemoraActual;
