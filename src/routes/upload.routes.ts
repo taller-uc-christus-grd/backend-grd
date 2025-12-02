@@ -73,67 +73,42 @@ type RawRow = Record<string, string>;
 const errorRecords: any[] = [];
 const validRecords: RawRow[] = [];
 
-/* ============================================================
-   HELPERS PARA FECHAS (ARREGLADOS)
-============================================================ */
+// Funciones Helper de limpieza
+function isEmpty(value?: any): boolean {
+  if (value === undefined || value === null) return true;
+  const v = typeof value === 'string' ? value.trim() : String(value).trim();
+  return v === '' || v.toLowerCase() === 'null';
+}
 
-/**
- * Convierte números Excel (tipo 45292) y strings de fecha normales.
- */
 function parseExcelDate(value: any): Date | null {
-  if (value === undefined || value === null) return null;
+  if (!value) return null;
 
-  // Ya es fecha válida
-  if (Object.prototype.toString.call(value) === "[object Date]") {
-    return isNaN(value.getTime()) ? null : value;
+  // Si ya es Date
+  if (value instanceof Date && !isNaN(value.getTime())) {
+    return value;
   }
 
-  // Número Excel
-  if (typeof value === "number") {
-    const excelEpoch = new Date(Date.UTC(1899, 11, 30));
-    const parsed = new Date(excelEpoch.getTime() + value * 86400000);
-
-    return isNaN(parsed.getTime()) ? null : parsed;
-  }
-
-  // Strings comunes
-  const str = String(value).trim();
-
-  // Formato dd/mm/yyyy
-  if (/^\d{2}\/\d{2}\/\d{4}$/.test(str)) {
-    const [d, m, y] = str.split("/");
-    const parsed = new Date(Number(y), Number(m) - 1, Number(d));
-    return isNaN(parsed.getTime()) ? null : parsed;
-  }
-
-  // yyyy-mm-dd
-  if (/^\d{4}-\d{2}-\d{2}/.test(str)) {
-    const parsed = new Date(str);
-    return isNaN(parsed.getTime()) ? null : parsed;
-  }
-
-  return null;
+  // Si viene como string (último recurso)
+  const d = new Date(value);
+  return isNaN(d.getTime()) ? null : d;
 }
 
-function isValidDate(value: any): boolean {
-  return parseExcelDate(value) !== null;
-}
-
-/* ============================================================
-   HELPERS GENERALES
-============================================================ */
 
 function isNumeric(value?: any): boolean {
   if (value === undefined || value === null) return false;
   return !isNaN(Number(value));
 }
 
+function isValidDate(value: any): boolean {
+  return parseExcelDate(value) !== null;
+}
+
 function cleanString(value?: any): string | null {
   if (value === undefined || value === null) return null;
-  const s = typeof value === "string" ? value : String(value);
-  const out = s.replace(/\s+/g, " ").trim();
-  return out === "" ? null : out;
-
+  const s = typeof value === 'string' ? value : String(value);
+  const out = s.replace(/\s+/g, ' ').trim();
+  return out === '' ? null : out;
+}
 
 // Helper para buscar columna "Convenio" de manera flexible
 // Prioriza "Convenios (cod)" sobre "Convenios (des)" cuando hay múltiples columnas
@@ -548,8 +523,8 @@ async function processRow(row: RawRow) {
   const pagoOutlierSuperior = isNumeric(row['Pago Outlier Superior']) ? parseFloat(row['Pago Outlier Superior']) : 0;
 
   // Calcular días de estadía desde las fechas del archivo maestro
-  const fechaIngreso = parseExcelDate(row["Fecha Ingreso completa"]);
-  const fechaAlta = parseExcelDate(row["Fecha Completa"]);
+  const fechaIngreso = new Date(row['Fecha Ingreso completa']);
+  const fechaAlta = new Date(row['Fecha Completa']);
   const diasEstada = Math.round((fechaAlta.getTime() - fechaIngreso.getTime()) / 86400000);
   const diasEstadaCalculados = diasEstada >= 0 ? diasEstada : 0;
 
@@ -583,8 +558,8 @@ async function processRow(row: RawRow) {
       numeroFolio: cleanString(row['ID Derivación']),
       episodioCmdb: cleanString(row['Episodio CMBD']),
       tipoEpisodio: cleanString(row['Tipo Actividad']),
-      fechaIngreso,
-      fechaAlta,
+      fechaIngreso: fechaIngreso,
+      fechaAlta: fechaAlta,
       servicioAlta: cleanString(row['Servicio Egreso (Descripción)']),
 
       montoRn: isNumeric(row['Facturación Total del episodio'])
@@ -615,7 +590,7 @@ async function processRow(row: RawRow) {
   console.log(
     `✅ [UPLOAD] Episodio creado: ${cleanString(row['Episodio CMBD'])}, convenio: "${convenio || ''}"`
   );
-}}
+}
 
 // --- Endpoint de Carga (AHORA GUARDA EN DB) ---
 router.post('/upload', requireAuth, upload.single('file'), async (req: Request, res: Response) => {
