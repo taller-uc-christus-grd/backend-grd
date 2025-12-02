@@ -372,15 +372,25 @@ async function calcularPagoDemoraRescate(params: {
       
       // Opción 1: Priorizar percentil75 desde GRD si está disponible
       if (grdId) {
-        const grd = await prisma.grd.findUnique({ where: { id: grdId } });
-        if (grd) {
-          // Priorizar percentil75 si está disponible
-          if (grd.percentil75) {
-            diasP75 = Number(grd.percentil75);
-            console.log(`✅ ${conv}: Usando percentil75 desde GRD: ${diasP75}`);
-          } else if (grd.puntoCorteSup) {
+        try {
+          const grd = await prisma.grd.findUnique({ where: { id: grdId } });
+          if (grd) {
+            // Intentar acceder a percentil75 de forma segura (puede no existir si la migración no se ejecutó)
+            const grdAny = grd as any;
+            if (grdAny.percentil75 && grdAny.percentil75 > 0) {
+              diasP75 = Number(grdAny.percentil75);
+              console.log(`✅ ${conv}: Usando percentil75 desde GRD: ${diasP75}`);
+            } else if (grd.puntoCorteSup) {
+              diasP75 = Number(grd.puntoCorteSup);
+              console.log(`ℹ️ ${conv}: Usando puntoCorteSup como fallback: ${diasP75}`);
+            }
+          }
+        } catch (e) {
+          // Si falla, usar puntoCorteSup como fallback
+          const grd = await prisma.grd.findUnique({ where: { id: grdId } });
+          if (grd && grd.puntoCorteSup) {
             diasP75 = Number(grd.puntoCorteSup);
-            console.log(`ℹ️ ${conv}: Usando puntoCorteSup como fallback: ${diasP75}`);
+            console.log(`ℹ️ ${conv}: Usando puntoCorteSup (percentil75 no disponible): ${diasP75}`);
           }
         }
       }
@@ -472,20 +482,36 @@ async function calcularPagoOutlierSuperior(params: {
     let percentil75: number | null = null;
     
     if (grdId) {
-      const grd = await prisma.grd.findUnique({ where: { id: grdId } });
-      if (grd) {
-        if (grd.puntoCorteSup) puntoCorteSuperíor = Number(grd.puntoCorteSup);
-        // Obtener percentil50 desde GRD (prioridad)
-        if (grd.percentil50) percentil50 = Number(grd.percentil50);
-        // Obtener percentil75 desde GRD (prioridad)
-        if (grd.percentil75) percentil75 = Number(grd.percentil75);
-        
-        console.log(`📊 GRD encontrado:`, {
-          puntoCorteSup: puntoCorteSuperíor,
-          percentil50: percentil50,
-          percentil75: percentil75,
-          puntoCorteInf: grd.puntoCorteInf
-        });
+      try {
+        const grd = await prisma.grd.findUnique({ where: { id: grdId } });
+        if (grd) {
+          if (grd.puntoCorteSup) puntoCorteSuperíor = Number(grd.puntoCorteSup);
+          // Intentar acceder a percentiles de forma segura (pueden no existir si la migración no se ejecutó)
+          const grdAny = grd as any;
+          if (grdAny.percentil50 && grdAny.percentil50 > 0) {
+            percentil50 = Number(grdAny.percentil50);
+          }
+          if (grdAny.percentil75 && grdAny.percentil75 > 0) {
+            percentil75 = Number(grdAny.percentil75);
+          }
+          
+          console.log(`📊 GRD encontrado:`, {
+            puntoCorteSup: puntoCorteSuperíor,
+            percentil50: percentil50,
+            percentil75: percentil75,
+            puntoCorteInf: grd.puntoCorteInf
+          });
+        }
+      } catch (e) {
+        // Si falla al acceder a percentiles, solo usar puntoCorteSup
+        const grd = await prisma.grd.findUnique({ where: { id: grdId } });
+        if (grd && grd.puntoCorteSup) {
+          puntoCorteSuperíor = Number(grd.puntoCorteSup);
+          console.log(`📊 GRD encontrado (sin percentiles):`, {
+            puntoCorteSup: puntoCorteSuperíor,
+            puntoCorteInf: grd.puntoCorteInf
+          });
+        }
       }
     }
     
