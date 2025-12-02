@@ -80,27 +80,15 @@ function isEmpty(value?: any): boolean {
   return v === '' || v.toLowerCase() === 'null';
 }
 
-function parseExcelDate(value: any): Date | null {
-  if (!value) return null;
-
-  // Si ya es Date
-  if (value instanceof Date && !isNaN(value.getTime())) {
-    return value;
-  }
-
-  // Si viene como string (último recurso)
-  const d = new Date(value);
-  return isNaN(d.getTime()) ? null : d;
+function excelSerialToJSDate(serial: number): Date {
+  const excelEpoch = new Date(1899, 11, 30);
+  return new Date(excelEpoch.getTime() + serial * 86400000);
 }
 
 
 function isNumeric(value?: any): boolean {
   if (value === undefined || value === null) return false;
   return !isNaN(Number(value));
-}
-
-function isValidDate(value: any): boolean {
-  return parseExcelDate(value) !== null;
 }
 
 function cleanString(value?: any): string | null {
@@ -523,8 +511,30 @@ async function processRow(row: RawRow) {
   const pagoOutlierSuperior = isNumeric(row['Pago Outlier Superior']) ? parseFloat(row['Pago Outlier Superior']) : 0;
 
   // Calcular días de estadía desde las fechas del archivo maestro
-  const fechaIngreso = new Date(row['Fecha Ingreso completa']);
-  const fechaAlta = new Date(row['Fecha Completa']);
+  let fechaIngresoRaw = row['Fecha Ingreso completa'];
+  let fechaAltaRaw = row['Fecha Completa'];
+
+  let fechaIngreso: Date | null = null;
+  let fechaAlta: Date | null = null;
+
+// Convertir fecha ingreso
+if (typeof fechaIngresoRaw === "number") {
+  fechaIngreso = excelSerialToJSDate(fechaIngresoRaw);
+} else {
+  fechaIngreso = parseExcelDate(fechaIngresoRaw);
+}
+
+// Convertir fecha alta
+if (typeof fechaAltaRaw === "number") {
+  fechaAlta = excelSerialToJSDate(fechaAltaRaw);
+} else {
+  fechaAlta = parseExcelDate(fechaAltaRaw);
+}
+
+// Si por algo viniera nulo
+if (!fechaIngreso) fechaIngreso = new Date("2000-01-01");
+if (!fechaAlta) fechaAlta = fechaIngreso;
+
   const diasEstada = Math.round((fechaAlta.getTime() - fechaIngreso.getTime()) / 86400000);
   const diasEstadaCalculados = diasEstada >= 0 ? diasEstada : 0;
 
@@ -558,8 +568,8 @@ async function processRow(row: RawRow) {
       numeroFolio: cleanString(row['ID Derivación']),
       episodioCmdb: cleanString(row['Episodio CMBD']),
       tipoEpisodio: cleanString(row['Tipo Actividad']),
-      fechaIngreso: fechaIngreso,
-      fechaAlta: fechaAlta,
+      fechaIngreso,
+      fechaAlta,
       servicioAlta: cleanString(row['Servicio Egreso (Descripción)']),
 
       montoRn: isNumeric(row['Facturación Total del episodio'])
