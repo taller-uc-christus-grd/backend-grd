@@ -358,6 +358,7 @@ router.post('/catalogs/norma-minsal/import', requireAuth, (req: Request, res: Re
       // Buscar percentil 50 - CRÍTICO para cálculo de outlier superior
       const p50 = parseDecimal(getColumnValue([
         'Percentil 50',
+        'TAB_1430_D_PERCT_50_G',
         'Percentil50',
         'P50',
         'PERCENTIL 50',
