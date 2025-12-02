@@ -440,7 +440,18 @@ async function calcularPagoOutlierSuperior(params: {
   }
   
   // Solo aplicar si el episodio está fuera de norma (outlier superior)
+  console.log(`🔍 calcularPagoOutlierSuperior - Verificando condiciones:`, {
+    convenio: conv,
+    esFNS012: conv === 'FNS012',
+    esFueraDeNorma,
+    diasEstada,
+    pesoGrd,
+    precioBase,
+    grdId
+  });
+  
   if (!esFueraDeNorma) {
+    console.log(`ℹ️ FNS012: No se calcula pago outlier porque esFueraDeNorma = ${esFueraDeNorma}`);
     return 0;
   }
   
@@ -453,7 +464,9 @@ async function calcularPagoOutlierSuperior(params: {
       const grd = await prisma.grd.findUnique({ where: { id: grdId } });
       if (grd) {
         if (grd.puntoCorteSup) puntoCorteSuperíor = Number(grd.puntoCorteSup);
-        if (grd.puntoCorteInf) percentil50 = Number(grd.puntoCorteInf); // Asumir que puntoCorteInf es el percentil 50
+        // NOTA: El percentil 50 NO es puntoCorteInf, debe obtenerse de ConfiguracionSistema o de otra fuente
+        // Por ahora, intentamos obtenerlo de ConfiguracionSistema primero
+        console.log(`📊 GRD encontrado: puntoCorteSup=${puntoCorteSuperíor}, puntoCorteInf=${grd.puntoCorteInf}`);
       }
     }
     
@@ -465,11 +478,19 @@ async function calcularPagoOutlierSuperior(params: {
       if (cfgSup && cfgSup.valor) puntoCorteSuperíor = parseFloat(cfgSup.valor);
     }
     
+    // Obtener percentil 50 desde ConfiguracionSistema (NO usar puntoCorteInf como percentil 50)
     if (percentil50 === null) {
       const cfgP50 = await prisma.configuracionSistema.findUnique({
         where: { clave: 'percentil50' }
       });
-      if (cfgP50 && cfgP50.valor) percentil50 = parseFloat(cfgP50.valor);
+      if (cfgP50 && cfgP50.valor) {
+        percentil50 = parseFloat(cfgP50.valor);
+        console.log(`✅ Percentil 50 obtenido de ConfiguracionSistema: ${percentil50}`);
+      } else {
+        // Fallback: Si no hay configuración, usar un valor por defecto o intentar calcularlo
+        // Por ahora, si no hay percentil50 configurado, no podemos calcular el pago outlier
+        console.warn('⚠️ FNS012: percentil50 no disponible en ConfiguracionSistema');
+      }
     }
     
     // Si faltan valores críticos, retornar 0
@@ -479,7 +500,7 @@ async function calcularPagoOutlierSuperior(params: {
     }
     
     if (percentil50 === null || percentil50 <= 0) {
-      console.warn('⚠️ FNS012: percentil50 no disponible');
+      console.warn('⚠️ FNS012: percentil50 no disponible - no se puede calcular pago outlier');
       return 0;
     }
     
@@ -2200,32 +2221,18 @@ router.patch('/episodios/:id',
     updateData.pagoDemoraRescate = pagoDemoraCalculado;
     console.log(`💰 Pago demora SIEMPRE recalculado: ${pagoDemoraCalculado} (convenio: ${convenio}, días: ${diasParaCalculo})`);
 
-    // PASO 2.5: Calcular pagoOutlierSuperior AUTOMÁTICAMENTE (SOLO FNS012, SIEMPRE)
-    const pagoOutlierCalculado = await calcularPagoOutlierSuperior({
-      convenio,
-      diasEstada: episodio.diasEstada ?? null,
-      pesoGrd: peso,
-      precioBase: precioBaseTramoParaCalculo,
-      grdId: episodio.grdId ?? null,
-      esFueraDeNorma: episodio.grupoEnNorma === false
-    });
-
-    // IMPORTANTE: SIEMPRE actualizar pagoOutlierSuperior (solo FNS012 si está fuera de norma)
-    // Si no es FNS012 o no está fuera de norma, será 0 (correcto)
-    updateData.pagoOutlierSuperior = pagoOutlierCalculado;
-    console.log(`💰 Pago outlier SIEMPRE recalculado: ${pagoOutlierCalculado} (convenio: ${convenio}, FNS012: ${convenio === 'FNS012'}, outlier: ${episodio.grupoEnNorma === false})`);
-
-    // PASO 2.6: Recalcular inlierOutlier y diasEstada automáticamente SIEMPRE
-    // Esto asegura que el campo se actualice en la base de datos
+    // PASO 2.6: Recalcular inlierOutlier y diasEstada automáticamente SIEMPRE ANTES de calcular pago outlier
+    // Esto asegura que el campo se actualice en la base de datos y que tengamos el valor correcto para calcular pago outlier
     const fechaIngreso = episodio.fechaIngreso;
     const fechaAlta = episodio.fechaAlta;
     const diasEstada = calcularDiasEstada(fechaIngreso, fechaAlta);
     
+    let inlierOutlierCalculado: string | null = null;
     // Calcular inlier/outlier basándose en días de estadía vs punto corte del GRD
     if (episodio.grd) {
       const puntoCorteInf = episodio.grd.puntoCorteInf ? Number(episodio.grd.puntoCorteInf) : null;
       const puntoCorteSup = episodio.grd.puntoCorteSup ? Number(episodio.grd.puntoCorteSup) : null;
-      const inlierOutlierCalculado = calcularInlierOutlier(diasEstada, puntoCorteInf, puntoCorteSup);
+      inlierOutlierCalculado = calcularInlierOutlier(diasEstada, puntoCorteInf, puntoCorteSup);
       
       if (inlierOutlierCalculado !== null) {
         updateData.inlierOutlier = inlierOutlierCalculado;
@@ -2233,6 +2240,23 @@ router.patch('/episodios/:id',
         console.log(`✅ Inlier/Outlier recalculado y actualizado en BD: ${inlierOutlierCalculado} (días: ${diasEstada}, puntoInf: ${puntoCorteInf}, puntoSup: ${puntoCorteSup})`);
       }
     }
+
+    // PASO 2.5: Calcular pagoOutlierSuperior AUTOMÁTICAMENTE (SOLO FNS012, SIEMPRE)
+    // IMPORTANTE: Usar el inlierOutlier calculado arriba para determinar si es outlier superior
+    const esOutlierSuperior = inlierOutlierCalculado === 'Outlier Superior';
+    const pagoOutlierCalculado = await calcularPagoOutlierSuperior({
+      convenio,
+      diasEstada: diasEstada ?? episodio.diasEstada ?? null,
+      pesoGrd: peso,
+      precioBase: precioBaseTramoParaCalculo,
+      grdId: episodio.grdId ?? null,
+      esFueraDeNorma: esOutlierSuperior
+    });
+
+    // IMPORTANTE: SIEMPRE actualizar pagoOutlierSuperior (solo FNS012 si está fuera de norma)
+    // Si no es FNS012 o no está fuera de norma, será 0 (correcto)
+    updateData.pagoOutlierSuperior = pagoOutlierCalculado;
+    console.log(`💰 Pago outlier SIEMPRE recalculado: ${pagoOutlierCalculado} (convenio: ${convenio}, FNS012: ${convenio === 'FNS012'}, outlier superior: ${esOutlierSuperior}, inlierOutlier: ${inlierOutlierCalculado})`);
 
     // PASO 3: montoFinal (SIEMPRE recalcular)
     const pagoDemoraParaMonto = updateData.pagoDemoraRescate ?? 0;
