@@ -1721,11 +1721,14 @@ router.patch('/episodios/:id',
     // Es solo una consecuencia automática de editar at o atDetalle
     const camposATEditables = ['at', 'atDetalle'];
     const camposOverrideManual = ['valorGRD', 'montoFinal']; // Campos para override manual en casos fuera de norma
+    const camposCodificadorEspeciales = ['documentacion']; // Campos editables solo por codificador
     const camposEditablesEnPayload = camposATEditables.filter(campo => campo in requestBody);
     const camposOverrideEnPayload = camposOverrideManual.filter(campo => campo in requestBody);
+    const camposCodificadorEnPayload = camposCodificadorEspeciales.filter(campo => campo in requestBody);
     const otrosCampos = Object.keys(requestBody).filter(
       campo => !camposATEditables.includes(campo) && 
                !camposOverrideManual.includes(campo) && 
+               !camposCodificadorEspeciales.includes(campo) &&
                campo !== 'montoAT' && 
                campo !== 'validado'
     );
@@ -1735,10 +1738,26 @@ router.patch('/episodios/:id',
       rol: userRole,
       camposATEditables: camposEditablesEnPayload,
       camposOverride: camposOverrideEnPayload,
+      camposCodificador: camposCodificadorEnPayload,
       otrosCampos: otrosCampos,
       montoATEnPayload: 'montoAT' in requestBody,
       payloadCompleto: requestBody
     });
+    
+    // CASO 0.5: Si está intentando editar 'documentacion', permitir SOLO codificador
+    if (camposCodificadorEnPayload.length > 0) {
+      if (!isCodificador) {
+        console.log('❌ Acceso denegado: Usuario intenta editar documentacion pero no es codificador. Rol:', userRole);
+        return res.status(403).json({
+          message: `Acceso denegado: Solo el rol codificador puede editar el campo documentacion. Rol actual: "${userRole}".`,
+          error: 'FORBIDDEN',
+          campos: camposCodificadorEnPayload,
+          rolActual: userRole,
+          camposRequeridos: ['documentacion']
+        });
+      }
+      console.log('✅ Permiso concedido para', userRole, 'editando documentacion:', camposCodificadorEnPayload);
+    }
     
     // CASO 1: Si está intentando editar 'at' o 'atDetalle' directamente, permitir SOLO codificador y gestion
     // ⚠️ IMPORTANTE: Finanzas NO puede editar estos campos
