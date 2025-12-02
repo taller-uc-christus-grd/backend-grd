@@ -1590,10 +1590,8 @@ const gestionSchema = Joi.object({
 // NOTA: 'at' y 'atDetalle' NO están permitidos para finanzas
 const finanzasSchema = Joi.object({
   estadoRN: Joi.string().valid('Aprobado', 'Pendiente', 'Rechazado').allow(null, '').optional(),
-  montoAT: Joi.alternatives().try(
-    Joi.number().min(0),
-    Joi.string().pattern(/^\d+(\.\d+)?$/).min(0)
-  ).optional(),
+  // montoAT NO es editable - se autocompleta automáticamente cuando se edita atDetalle
+  // Removido del esquema de finanzas
   montoRN: Joi.alternatives().try(
     Joi.number().min(0),
     Joi.string().pattern(/^\d+(\.\d+)?$/).min(0)
@@ -1626,10 +1624,9 @@ const finanzasSchema = Joi.object({
 }).unknown(false); // No permitir campos desconocidos
 
 // Mapeo completo de campos del frontend a la base de datos para finanzas
+// IMPORTANTE: montoAT NO está incluido - no es editable para finanzas
 const finanzasFieldMapping: Record<string, string> = {
   estadoRN: 'estadoRn',
-  at: 'atSn',
-  montoAT: 'montoAt',
   montoRN: 'montoRn',
   pagoDemora: 'pagoDemoraRescate',
   pagoOutlierSup: 'pagoOutlierSuperior',
@@ -1770,14 +1767,22 @@ router.patch('/episodios/:id',
       console.log(' Permiso concedido para', userRole, 'editando:', otrosCampos);
     }
     
-    // CASO ESPECIAL: Si el payload solo contiene montoAT sin at ni atDetalle
-    // Esto no debería pasar desde el frontend, pero por seguridad rechazar
-    if ('montoAT' in requestBody && camposEditablesEnPayload.length === 0 && otrosCampos.length === 0) {
-      return res.status(403).json({
-        message: 'Acceso denegado: El campo montoAT no puede editarse directamente. Solo se autocompleta al editar AT Detalle.',
-        error: 'FORBIDDEN',
-        rolActual: userRole
-      });
+    // CASO ESPECIAL: Si el payload contiene montoAT, rechazar explícitamente
+    // montoAT NO es editable - solo se autocompleta automáticamente cuando codificador/gestión edita atDetalle
+    // Finanzas NO puede editar montoAT ni ningún campo relacionado con AT
+    if ('montoAT' in requestBody) {
+      // Solo permitir si viene junto con atDetalle y el usuario es codificador o gestión
+      if (camposEditablesEnPayload.includes('atDetalle') && (isCodificador || isGestion)) {
+        // Permitir - montoAT se autocompletará automáticamente en el backend
+        console.log('✅ montoAT permitido porque viene con atDetalle y usuario es codificador/gestión');
+      } else {
+        // Rechazar - finanzas no puede editar montoAT
+        return res.status(403).json({
+          message: 'Acceso denegado: El campo montoAT no puede editarse directamente. Solo se autocompleta automáticamente cuando codificador o gestión edita AT Detalle. Finanzas no tiene permisos para editar este campo.',
+          error: 'FORBIDDEN',
+          rolActual: userRole
+        });
+      }
     }
     
     console.log(' Permisos verificados correctamente. Procediendo con actualización...');
