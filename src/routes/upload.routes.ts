@@ -671,12 +671,12 @@ async function processRow(row: RawRow) {
   let fechaAlta: Date | null = null;
 
   if (fechaIngresoKey) {
-    const fechaIngresoValue = row[fechaIngresoKey];
+    const fechaIngresoValue: any = row[fechaIngresoKey];
     console.log(`📅 Parseando fecha de ingreso. Clave: "${fechaIngresoKey}", Valor: ${fechaIngresoValue}, Tipo: ${typeof fechaIngresoValue}`);
     
     // Si ya es un objeto Date válido
-    if (fechaIngresoValue instanceof Date && !isNaN(fechaIngresoValue.getTime())) {
-      fechaIngreso = fechaIngresoValue;
+    if (fechaIngresoValue && typeof fechaIngresoValue === 'object' && fechaIngresoValue.constructor === Date && !isNaN((fechaIngresoValue as Date).getTime())) {
+      fechaIngreso = fechaIngresoValue as Date;
       console.log(`✅ Fecha de ingreso es Date object: ${fechaIngreso.toISOString()}`);
     }
     // Si es un string ISO
@@ -703,12 +703,12 @@ async function processRow(row: RawRow) {
   }
 
   if (fechaAltaKey) {
-    const fechaAltaValue = row[fechaAltaKey];
+    const fechaAltaValue: any = row[fechaAltaKey];
     console.log(`📅 Parseando fecha de alta. Clave: "${fechaAltaKey}", Valor: ${fechaAltaValue}, Tipo: ${typeof fechaAltaValue}`);
     
     // Si ya es un objeto Date válido
-    if (fechaAltaValue instanceof Date && !isNaN(fechaAltaValue.getTime())) {
-      fechaAlta = fechaAltaValue;
+    if (fechaAltaValue && typeof fechaAltaValue === 'object' && fechaAltaValue.constructor === Date && !isNaN((fechaAltaValue as Date).getTime())) {
+      fechaAlta = fechaAltaValue as Date;
       console.log(`✅ Fecha de alta es Date object: ${fechaAlta.toISOString()}`);
     }
     // Si es un string ISO
