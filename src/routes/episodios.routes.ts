@@ -1566,6 +1566,7 @@ const codificadorSchema = Joi.object({
     Joi.string().valid('S', 's', 'N', 'n')
   ).optional(),
   atDetalle: Joi.string().allow(null, '').optional(),
+  documentacion: Joi.string().allow(null, '').optional(),
   diasDemoraRescate: Joi.alternatives().try(
     Joi.number().integer().min(0),
     Joi.string().pattern(/^\d+$/).min(0)
@@ -1658,6 +1659,7 @@ const finanzasFieldMapping: Record<string, string> = {
 const codificadorFieldMapping: Record<string, string> = {
   at: 'atSn',
   atDetalle: 'atDetalle',
+  documentacion: 'documentacion',
   diasDemoraRescate: 'diasDemoraRescate',
   pagoDemora: 'pagoDemoraRescate',
   montoRN: 'montoRn',
@@ -2152,13 +2154,16 @@ router.patch('/episodios/:id',
     // 1. Cambió el peso (puede cambiar el tramo para FNS012/FNS026)
     // 2. Cambió el convenio
     // 3. precioBaseTramo es null y hay convenio
-    // IMPORTANTE: Ignorar cualquier valor de precioBaseTramo que venga en el request (Opción A recomendada)
+    // IMPORTANTE: Si viene precioBaseTramo en el request y NO hay cambios de peso/convenio, 
+    // se guarda el valor editado manualmente (para finanzas y gestión)
     const pesoCambio = updateData.pesoGrd !== undefined && updateData.pesoGrd !== pesoActual;
     const convenioCambio = updateData.convenio !== undefined && updateData.convenio !== convenioActual;
-    const necesitaRecalculo = pesoCambio || convenioCambio || (!precioBaseTramoActual && convenio);
+    const precioBaseTramoEditado = updateData.precioBaseTramo !== undefined;
+    const necesitaRecalculo = pesoCambio || convenioCambio || (!precioBaseTramoActual && convenio && !precioBaseTramoEditado);
     
     let precioBaseTramo: number | null = precioBaseTramoActual;
     if (necesitaRecalculo && convenio) {
+      // Recalcular automáticamente solo si cambió peso/convenio o si no hay valor
       const pesoParaCalculo = pesoCambio && updateData.pesoGrd !== undefined 
         ? Number(updateData.pesoGrd) 
         : peso;
@@ -2166,14 +2171,24 @@ router.patch('/episodios/:id',
       if (precioBaseTramo !== null) {
         updateData.precioBaseTramo = precioBaseTramo;
         if (process.env.NODE_ENV === 'development') {
-          console.log(`💰 Precio base recalculado para episodio ${episodio.id}: ${precioBaseTramo} (convenio: ${convenio}, peso: ${pesoParaCalculo})`);
+          console.log(`💰 Precio base recalculado automáticamente para episodio ${episodio.id}: ${precioBaseTramo} (convenio: ${convenio}, peso: ${pesoParaCalculo})`);
         }
       }
-    } else if (updateData.precioBaseTramo !== undefined) {
-      // Si viene precioBaseTramo en el request pero no necesita recálculo, ignorarlo (mantener consistencia)
-      delete updateData.precioBaseTramo;
-      if (process.env.NODE_ENV === 'development') {
-        console.log(`⚠️ precioBaseTramo enviado en request ignorado (se recalcula automáticamente)`);
+    } else if (precioBaseTramoEditado && !necesitaRecalculo) {
+      // Si viene precioBaseTramo en el request y NO necesita recálculo, guardar el valor editado manualmente
+      // Esto permite a finanzas y gestión editar manualmente el precio base
+      precioBaseTramo = typeof updateData.precioBaseTramo === 'number' 
+        ? updateData.precioBaseTramo 
+        : parseFloat(String(updateData.precioBaseTramo));
+      if (!isNaN(precioBaseTramo) && precioBaseTramo >= 0) {
+        updateData.precioBaseTramo = precioBaseTramo;
+        if (process.env.NODE_ENV === 'development') {
+          console.log(`✅ Precio base editado manualmente para episodio ${episodio.id}: ${precioBaseTramo} (guardado sin recalcular)`);
+        }
+      } else {
+        // Si el valor no es válido, eliminar del updateData y mantener el actual
+        delete updateData.precioBaseTramo;
+        console.warn(`⚠️ precioBaseTramo enviado no es válido, manteniendo valor actual`);
       }
     }
     
@@ -3072,3 +3087,4 @@ router.post('/episodios/import', requireAuth, upload.single('file'), async (req:
 });
 
 export default router;
+
