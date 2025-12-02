@@ -1990,6 +1990,9 @@ router.patch('/episodios/:id',
         } else {
           updateData[dbKey] = value;
         }
+      } else if (dbKey === 'documentacion') {
+        // documentacion: puede ser string o null, se procesará más adelante
+        updateData[dbKey] = value;
       } else {
         updateData[dbKey] = value;
       }
