@@ -1633,6 +1633,15 @@ router.patch('/episodios/:id',
     const isFinanzas = normalizedRole === 'FINANZAS';
     const isGestion = normalizedRole === 'GESTION';
     
+    // Log detallado para debug
+    console.log('🔍 Normalización de rol:', {
+      userRole,
+      normalizedRole,
+      isCodificador,
+      isFinanzas,
+      isGestion
+    });
+    
     // Log para debug
     console.log('🔍 PATCH /episodios/:id - Información del usuario:', {
       userRole: userRole,
@@ -1671,13 +1680,15 @@ router.patch('/episodios/:id',
       payloadCompleto: requestBody
     });
     
-    // CASO 1: Si está intentando editar 'at' o 'atDetalle' directamente, permitir codificador y gestion
+    // CASO 1: Si está intentando editar 'at' o 'atDetalle' directamente, permitir SOLO codificador y gestion
+    // ⚠️ IMPORTANTE: Finanzas NO puede editar estos campos
     // ⚠️ IMPORTANTE: Incluso si montoAT viene junto, es parte de la autocompletación/limpieza automática
     if (camposEditablesEnPayload.length > 0) {
       const rolesPermitidosParaAT = ['CODIFICADOR', 'GESTION'];
       if (!rolesPermitidosParaAT.includes(userRoleUpper)) {
+        console.log('❌ Acceso denegado: Usuario intenta editar AT/AT Detalle pero no es codificador ni gestion. Rol:', userRole);
         return res.status(403).json({
-          message: `Acceso denegado: Solo los roles codificador y gestion pueden editar los campos AT(S/N) y AT Detalle. Rol actual: "${userRole}".`,
+          message: `Acceso denegado: Solo los roles codificador y gestion pueden editar los campos AT(S/N) y AT Detalle. Rol actual: "${userRole}". Finanzas no tiene permisos para editar estos campos.`,
           error: 'FORBIDDEN',
           campos: camposEditablesEnPayload,
           rolActual: userRole,
@@ -1686,7 +1697,7 @@ router.patch('/episodios/:id',
       }
       // Si el rol es CODIFICADOR o GESTION y está editando at o atDetalle, permitir
       // Incluso si montoAT viene en el payload, es aceptable porque se autocompleta
-      console.log(' Permiso concedido para', userRole, 'editando:', camposEditablesEnPayload);
+      console.log('✅ Permiso concedido para', userRole, 'editando AT/AT Detalle:', camposEditablesEnPayload);
     }
     
     // CASO 1.5: Si está intentando editar valorGRD o montoFinal (override manual), permitir finanzas y codificador
@@ -1731,67 +1742,18 @@ router.patch('/episodios/:id',
     
     console.log(' Permisos verificados correctamente. Procediendo con actualización...');
 
-    // Validar permisos según campos
-    // Campo AT (S/N) puede ser editado por codificador y gestion
-    // Campos AT Detalle puede ser editado por codificador y gestion (montoAT se autocompleta)
-    const campoAT = 'at';
-    const camposATFinanzas = ['montoAT']; // montoAT no es editable directamente, solo se autocompleta
+    // NOTA: Las validaciones de permisos para AT y AT Detalle ya se hicieron arriba en CASO 1
+    // Aquí solo logueamos para confirmar que codificador y gestión pueden editar
     const camposSolicitados = Object.keys(requestBody);
-    const intentaEditarAT = camposSolicitados.includes(campoAT);
+    const intentaEditarAT = camposSolicitados.includes('at');
     const intentaEditarATDetalle = camposSolicitados.includes('atDetalle');
-    const intentaEditarATFinanzas = camposSolicitados.some(campo => camposATFinanzas.includes(campo));
-    
-    console.log('🔍 Validación de permisos AT:', {
-      camposSolicitados: camposSolicitados,
-      intentaEditarAT: intentaEditarAT,
-      intentaEditarATDetalle: intentaEditarATDetalle,
-      intentaEditarATFinanzas: intentaEditarATFinanzas,
-      isCodificador: isCodificador,
-      isGestion: isGestion,
-      isFinanzas: isFinanzas,
-      requestBody: requestBody
-    });
-    
-    // Validar campo AT (S/N) - codificador y gestion
-    if (intentaEditarAT && !isCodificador && !isGestion) {
-      console.log('❌ Acceso denegado: Usuario intenta editar campo AT (S/N) pero no es codificador ni gestion');
-      return res.status(403).json({
-        message: 'No tienes permisos para editar el campo AT (S/N). Solo los perfiles de codificador y gestion pueden modificar este campo.',
-        error: 'Forbidden',
-        field: campoAT
-      });
-    }
-    
-    // Validar campo AT Detalle - codificador y gestion
-    if (intentaEditarATDetalle && !isCodificador && !isGestion) {
-      console.log('❌ Acceso denegado: Usuario intenta editar campo AT Detalle pero no es codificador ni gestion');
-      return res.status(403).json({
-        message: 'No tienes permisos para editar el campo AT Detalle. Solo los perfiles de codificador y gestion pueden modificar este campo.',
-        error: 'Forbidden',
-        field: 'atDetalle'
-      });
-    }
-    
-    // Validar campo Monto AT - no es editable directamente, solo se autocompleta
-    if (intentaEditarATFinanzas && !isFinanzas) {
-      console.log('❌ Acceso denegado: Usuario intenta editar campo Monto AT pero no es finanzas');
-      return res.status(403).json({
-        message: 'No tienes permisos para editar el campo Monto AT. Este campo se autocompleta automáticamente al editar AT Detalle.',
-        error: 'Forbidden',
-        field: camposSolicitados.find(campo => camposATFinanzas.includes(campo)) || 'unknown'
-      });
-    }
     
     if (intentaEditarAT && (isCodificador || isGestion)) {
-      console.log(`✅ Usuario ${isCodificador ? 'codificador' : 'gestion'} puede editar campo AT (S/N)`);
+      console.log(`✅ Confirmado: Usuario ${isCodificador ? 'codificador' : 'gestion'} puede editar campo AT (S/N)`);
     }
     
     if (intentaEditarATDetalle && (isCodificador || isGestion)) {
-      console.log(`✅ Usuario ${isCodificador ? 'codificador' : 'gestion'} puede editar campo AT Detalle`);
-    }
-    
-    if (intentaEditarATFinanzas && isFinanzas) {
-      console.log('✅ Usuario finanzas puede editar campo Monto AT');
+      console.log(`✅ Confirmado: Usuario ${isCodificador ? 'codificador' : 'gestion'} puede editar campo AT Detalle`);
     }
 
     // 2. MODIFICACIÓN: "Rescatar" el campo 'validado' (de gestión) ANTES de la validación
@@ -1805,14 +1767,17 @@ router.patch('/episodios/:id',
       let schema;
       let errorMessagePrefix = '';
       
-      if (userRole.toLowerCase() === 'codificador') {
+      // Usar normalizedRole para consistencia (ya está normalizado arriba)
+      if (isCodificador) {
         // Codificador puede editar 'at', 'atDetalle', y para casos fuera de norma: 'valorGRD' y 'montoFinal'
         schema = codificadorSchema;
         errorMessagePrefix = 'Error de validación (codificador)';
-      } else if (userRole.toLowerCase() === 'gestion') {
+        console.log('✅ Usando esquema de codificador para validación');
+      } else if (isGestion) {
         // Gestión puede editar 'at', 'atDetalle', y 'precioBaseTramo'
         schema = gestionSchema;
         errorMessagePrefix = 'Error de validación (gestión)';
+        console.log('✅ Usando esquema de gestión para validación');
       } else {
         // Finanzas usa el esquema de finanzas (sin 'at' y 'atDetalle')
         schema = finanzasSchema;
@@ -2681,10 +2646,14 @@ async function processRow(row: RawRow, rowIndex?: number) {
       console.log(`   ❌ NO se encontró "Peso GRD Medio (Todos)" para episodio ${episodioCmdb}. Retornando null.`);
       return null;
     })(),
-    inlierOutlier: cleanString(row['IR Alta Inlier / Outlier']) || '',
-    diasEstada: isNumeric(row['Estancia real del episodio'])
-      ? parseInt(String(row['Estancia real del episodio']), 10)
-      : null,
+    // inlierOutlier se calculará automáticamente después, NO usar el valor del archivo maestro
+    diasEstada: (() => {
+      // Calcular días de estadía desde las fechas del archivo maestro
+      const fechaIngreso = new Date(row['Fecha Ingreso completa']);
+      const fechaAlta = new Date(row['Fecha Completa']);
+      const diasEstada = Math.round((fechaAlta.getTime() - fechaIngreso.getTime()) / 86400000);
+      return diasEstada >= 0 ? diasEstada : null;
+    })(),
     // Convenio es un campo requerido - SIEMPRE debe ser string (nunca null)
     // Misma lógica que tipoEpisodio: siempre string, cadena vacía si no hay valor
     convenio: convenioFinal,
@@ -2748,6 +2717,25 @@ async function processRow(row: RawRow, rowIndex?: number) {
     episodioData.convenio = String(episodioData.convenio || '');
   }
 
+  // Calcular inlier/outlier automáticamente ANTES de crear el episodio
+  // NO usar el valor del archivo maestro, calcularlo basándose en días de estadía vs punto corte del GRD
+  let inlierOutlierCalculado: string | null = null;
+  const diasEstadaCalculados = episodioData.diasEstada;
+  
+  if (grdRule && diasEstadaCalculados !== null && diasEstadaCalculados !== undefined) {
+    const puntoCorteInf = grdRule.puntoCorteInf ? Number(grdRule.puntoCorteInf) : null;
+    const puntoCorteSup = grdRule.puntoCorteSup ? Number(grdRule.puntoCorteSup) : null;
+    
+    inlierOutlierCalculado = calcularInlierOutlier(diasEstadaCalculados, puntoCorteInf, puntoCorteSup);
+    
+    console.log(`📊 Inlier/Outlier calculado automáticamente: ${inlierOutlierCalculado} (días: ${diasEstadaCalculados}, puntoInf: ${puntoCorteInf}, puntoSup: ${puntoCorteSup})`);
+  }
+  
+  // Agregar inlierOutlier calculado al objeto de datos
+  if (inlierOutlierCalculado !== null) {
+    episodioData.inlierOutlier = inlierOutlierCalculado;
+  }
+
   const episodioCreado = await prisma.episodio.create({
     data: episodioData,
     include: {
@@ -2760,6 +2748,7 @@ async function processRow(row: RawRow, rowIndex?: number) {
   console.log(`📦 Episodio creado - ID: ${episodioCreado.id}, Episodio: ${episodioCreado.episodioCmdb}`);
   console.log(`   Convenio en objeto creado: "${episodioCreado.convenio || 'null/undefined'}"`);
   console.log(`   Precio base tramo guardado: ${episodioCreado.precioBaseTramo ?? 'null'}`);
+  console.log(`   Inlier/Outlier calculado: ${episodioCreado.inlierOutlier ?? 'null'}`);
   console.log(`   ⚠️ pesoGrd guardado en BD: ${episodioCreado.pesoGrd ?? 'null'} (tipo: ${typeof episodioCreado.pesoGrd})`);
   console.log(`   ⚠️ peso en Grd: ${episodioCreado.grd?.peso ?? 'null'} (tipo: ${typeof episodioCreado.grd?.peso})`);
   
