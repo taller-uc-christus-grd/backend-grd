@@ -80,15 +80,39 @@ function isEmpty(value?: any): boolean {
   return v === '' || v.toLowerCase() === 'null';
 }
 
+function parseExcelDate(value: any): Date | null {
+  if (value === null || value === undefined) return null;
+
+  // 1) Si ya es Date válido
+  if (value instanceof Date && !isNaN(value.getTime())) {
+    return value;
+  }
+
+  // 2) Si es número (serial Excel)
+  if (isNumeric(value)) {
+    const serial = Number(value);
+    if (serial > 30000 && serial < 60000) { // rango aprox 1980-2070
+      const excelEpoch = new Date(1899, 11, 30);
+      return new Date(excelEpoch.getTime() + serial * 86400000);
+    }
+  }
+
+  // 3) Si es string
+  const d = new Date(value);
+  if (!isNaN(d.getTime())) {
+    return d;
+  }
+
+  return null;
+}
+
 function isNumeric(value?: any): boolean {
   if (value === undefined || value === null) return false;
   return !isNaN(Number(value));
 }
 
-function isValidDate(value?: any): boolean {
-  if (value === undefined || value === null) return false;
-  const d = value instanceof Date ? value : new Date(value);
-  return !isNaN(d.getTime());
+function isValidDate(value: any): boolean {
+  return parseExcelDate(value) !== null;
 }
 
 function cleanString(value?: any): string | null {
