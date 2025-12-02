@@ -510,6 +510,35 @@ async function processRow(row: RawRow) {
   const pagoDemoraRescate = isNumeric(row['Pago Demora Rescate']) ? parseFloat(row['Pago Demora Rescate']) : 0;
   const pagoOutlierSuperior = isNumeric(row['Pago Outlier Superior']) ? parseFloat(row['Pago Outlier Superior']) : 0;
 
+  // Calcular días de estadía desde las fechas del archivo maestro
+  const fechaIngreso = new Date(row['Fecha Ingreso completa']);
+  const fechaAlta = new Date(row['Fecha Completa']);
+  const diasEstada = Math.round((fechaAlta.getTime() - fechaIngreso.getTime()) / 86400000);
+  const diasEstadaCalculados = diasEstada >= 0 ? diasEstada : 0;
+
+  // Calcular inlier/outlier automáticamente basándose en días de estadía vs punto corte del GRD
+  // NO usar el valor del archivo maestro, calcularlo automáticamente
+  let inlierOutlierCalculado: string | null = null;
+  if (grdRule && diasEstadaCalculados >= 0) {
+    const puntoCorteInf = grdRule.puntoCorteInf ? Number(grdRule.puntoCorteInf) : null;
+    const puntoCorteSup = grdRule.puntoCorteSup ? Number(grdRule.puntoCorteSup) : null;
+    
+    // Outlier Superior: días de estadía > punto corte superior
+    if (puntoCorteSup !== null && diasEstadaCalculados > puntoCorteSup) {
+      inlierOutlierCalculado = 'Outlier Superior';
+    }
+    // Outlier Inferior: días de estadía < punto corte inferior
+    else if (puntoCorteInf !== null && diasEstadaCalculados < puntoCorteInf) {
+      inlierOutlierCalculado = 'Outlier Inferior';
+    }
+    // En cualquier otro caso es Inlier
+    else {
+      inlierOutlierCalculado = 'Inlier';
+    }
+    
+    console.log(`📊 Inlier/Outlier calculado automáticamente: ${inlierOutlierCalculado} (días: ${diasEstadaCalculados}, puntoInf: ${puntoCorteInf}, puntoSup: ${puntoCorteSup})`);
+  }
+
   // Crear el episodio con convenio y precioBaseTramo calculados
   await prisma.episodio.create({
     data: {
@@ -517,8 +546,8 @@ async function processRow(row: RawRow) {
       numeroFolio: cleanString(row['ID Derivación']),
       episodioCmdb: cleanString(row['Episodio CMBD']),
       tipoEpisodio: cleanString(row['Tipo Actividad']),
-      fechaIngreso: new Date(row['Fecha Ingreso completa']),
-      fechaAlta: new Date(row['Fecha Completa']),
+      fechaIngreso: fechaIngreso,
+      fechaAlta: fechaAlta,
       servicioAlta: cleanString(row['Servicio Egreso (Descripción)']),
 
       montoRn: isNumeric(row['Facturación Total del episodio'])
@@ -529,7 +558,8 @@ async function processRow(row: RawRow) {
       // convenio nunca null: si no se encontró, string vacía
       convenio: convenio || '',
       precioBaseTramo: precioBaseTramoCalculado,
-      inlierOutlier: cleanString(row['IR Alta Inlier / Outlier']),
+      inlierOutlier: inlierOutlierCalculado, // Usar el valor calculado automáticamente, NO el del archivo maestro
+      diasEstada: diasEstadaCalculados, // Guardar días de estadía calculados
 
       // ✅ NUEVOS CAMPOS CON DEFAULTS PARA CAMPOS EN BLANCO
       estadoRn: estadoRN,

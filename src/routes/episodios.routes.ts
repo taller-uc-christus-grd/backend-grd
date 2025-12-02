@@ -1819,9 +1819,11 @@ router.patch('/episodios/:id',
         errorMessagePrefix = 'Error de validación (finanzas)';
         
         // Verificar que Finanzas no intente editar 'at' o 'atDetalle'
+        // IMPORTANTE: Finanzas NO puede editar AT ni AT Detalle, solo codificador y gestión
         if ('at' in requestBody || 'atDetalle' in requestBody) {
+          console.log('❌ Finanzas intenta editar AT o AT Detalle - DENEGADO');
           return res.status(403).json({
-            message: 'Acceso denegado: Solo los roles codificador y gestion pueden editar los campos AT(S/N) y AT Detalle.',
+            message: 'Acceso denegado: Solo los roles codificador y gestion pueden editar los campos AT(S/N) y AT Detalle. Finanzas no tiene permisos para editar estos campos.',
             error: 'FORBIDDEN',
             campos: ['at', 'atDetalle'].filter(c => c in requestBody),
             rolActual: userRole
@@ -1917,10 +1919,15 @@ router.patch('/episodios/:id',
       // Normalizar campos antes de guardar
       if (dbKey === 'atSn') {
         // Normalizar 'at': aceptar boolean o "S"/"N", convertir a boolean para BD
-        if (value === true || value === 'S' || value === 's') {
+        // IMPORTANTE: Siempre asignar un valor (true o false), nunca dejar undefined
+        const atValueStr = String(value || '').trim().toUpperCase();
+        if (value === true || atValueStr === 'S' || atValueStr === 'SÍ' || atValueStr === 'SI' || atValueStr === 'YES') {
           updateData.atSn = true;
-        } else if (value === false || value === 'N' || value === 'n') {
+          console.log(`✅ AT normalizado a true (desde: ${value})`);
+        } else {
+          // Cualquier otro valor (false, 'N', null, undefined, etc.) se convierte a false
           updateData.atSn = false;
+          console.log(`✅ AT normalizado a false (desde: ${value})`);
         }
       } else if (dbKey === 'estadoRn') {
         // Normalizar estadoRN: vacío o inválido → null
