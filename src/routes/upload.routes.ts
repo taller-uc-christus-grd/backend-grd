@@ -110,6 +110,11 @@ function cleanString(value?: any): string | null {
   return out === '' ? null : out;
 }
 
+function excelSerialToJSDate(serial: number): Date {
+  const excelEpoch = new Date(1899, 11, 30);
+  return new Date(excelEpoch.getTime() + serial * 86400000);
+}
+
 // Helper para buscar columna "Convenio" de manera flexible
 // Prioriza "Convenios (cod)" sobre "Convenios (des)" cuando hay múltiples columnas
 function findConvenioValue(row: RawRow): string | null {
@@ -523,10 +528,38 @@ async function processRow(row: RawRow) {
   const pagoOutlierSuperior = isNumeric(row['Pago Outlier Superior']) ? parseFloat(row['Pago Outlier Superior']) : 0;
 
   // Calcular días de estadía desde las fechas del archivo maestro
-  const fechaIngreso = new Date(row['Fecha Ingreso completa']);
-  const fechaAlta = new Date(row['Fecha Completa']);
-  const diasEstada = Math.round((fechaAlta.getTime() - fechaIngreso.getTime()) / 86400000);
-  const diasEstadaCalculados = diasEstada >= 0 ? diasEstada : 0;
+  let fechaIngresoRaw = row['Fecha Ingreso completa'];
+  let fechaAltaRaw = row['Fecha Completa'];
+
+  let fechaIngreso: Date | null = null;
+  let fechaAlta: Date | null = null;
+
+  // Fecha ingreso
+  if (typeof fechaIngresoRaw === 'number') {
+    fechaIngreso = excelSerialToJSDate(fechaIngresoRaw);
+  } else {
+    fechaIngreso = parseExcelDate(fechaIngresoRaw);
+  }
+
+  // Fecha alta
+  if (typeof fechaAltaRaw === 'number') {
+    fechaAlta = excelSerialToJSDate(fechaAltaRaw);
+  } else {
+    fechaAlta = parseExcelDate(fechaAltaRaw);
+  }
+
+  // Fallback por seguridad
+  if (!fechaIngreso) fechaIngreso = new Date('2000-01-01');
+  if (!fechaAlta) fechaAlta = fechaIngreso;
+
+  // Cálculo seguro para TS strict mode
+  let diasEstadaCalculados = 0;
+  if (fechaIngreso && fechaAlta) {
+    diasEstadaCalculados = Math.max(
+      0,
+      Math.round((fechaAlta.getTime() - fechaIngreso.getTime()) / 86400000)
+    );
+  }
 
   // Calcular inlier/outlier automáticamente basándose en días de estadía vs punto corte del GRD
   // NO usar el valor del archivo maestro, calcularlo automáticamente
