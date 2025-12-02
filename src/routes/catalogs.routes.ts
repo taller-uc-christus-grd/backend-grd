@@ -437,17 +437,23 @@ router.post('/catalogs/norma-minsal/import', requireAuth, (req: Request, res: Re
       // Preparar datos para upsert - Prisma acepta números directamente para Decimal
       // NO incluir percentiles por ahora hasta que se ejecute la migración
       // Esto evita errores si la BD no tiene esos campos aún
-      const dataToUpsert: Prisma.GrdUncheckedCreateInput = {
+      // Crear objeto explícito sin percentiles para evitar que Prisma intente insertarlos
+      const dataToUpsert: {
+        codigo: string;
+        descripcion: string;
+        peso: number;
+        puntoCorteInf: number;
+        puntoCorteSup: number;
+        precioBaseTramo: number;
+      } = {
         codigo: codigo,
         descripcion: `Descripción de ${codigo}`, // El CSV no suele tener descripción
         peso: peso,
         puntoCorteInf: pci,
         puntoCorteSup: pcs,
         precioBaseTramo: precioBaseEjemplo,
-        // NOTA: Los percentiles se agregarán después de ejecutar la migración
-        // percentil25: p25 > 0 ? p25 : undefined,
-        // percentil50: p50 > 0 ? p50 : undefined,
-        // percentil75: p75 > 0 ? p75 : undefined,
+        // IMPORTANTE: NO incluir percentiles hasta que se ejecute la migración
+        // Los campos percentil25, percentil50, percentil75 NO existen en la BD aún
       };
 
       try {
