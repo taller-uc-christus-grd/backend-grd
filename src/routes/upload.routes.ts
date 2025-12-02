@@ -83,15 +83,23 @@ function isEmpty(value?: any): boolean {
 function parseExcelDate(value: any): Date | null {
   if (!value) return null;
 
-  // Si ya es Date
+  // ✔ Ya viene como Date desde XLSX (cuando cellDates: true)
   if (value instanceof Date && !isNaN(value.getTime())) {
     return value;
   }
 
-  // Si viene como string (último recurso)
+  // ✔ Número de Excel (días desde 1900)
+  if (typeof value === 'number' && !isNaN(value)) {
+    const excelEpoch = new Date(Date.UTC(1899, 11, 30));
+    const fecha = new Date(excelEpoch.getTime() + value * 86400000);
+    return fecha;
+  }
+
+  // ✔ String tipo "2024-01-15" o "15/01/2024"
   const d = new Date(value);
   return isNaN(d.getTime()) ? null : d;
 }
+
 
 
 function isNumeric(value?: any): boolean {
@@ -528,38 +536,10 @@ async function processRow(row: RawRow) {
   const pagoOutlierSuperior = isNumeric(row['Pago Outlier Superior']) ? parseFloat(row['Pago Outlier Superior']) : 0;
 
   // Calcular días de estadía desde las fechas del archivo maestro
-  let fechaIngresoRaw = row['Fecha Ingreso completa'];
-  let fechaAltaRaw = row['Fecha Completa'];
-
-  let fechaIngreso: Date | null = null;
-  let fechaAlta: Date | null = null;
-
-  // Fecha ingreso
-  if (typeof fechaIngresoRaw === 'number') {
-    fechaIngreso = excelSerialToJSDate(fechaIngresoRaw);
-  } else {
-    fechaIngreso = parseExcelDate(fechaIngresoRaw);
-  }
-
-  // Fecha alta
-  if (typeof fechaAltaRaw === 'number') {
-    fechaAlta = excelSerialToJSDate(fechaAltaRaw);
-  } else {
-    fechaAlta = parseExcelDate(fechaAltaRaw);
-  }
-
-  // Fallback por seguridad
-  if (!fechaIngreso) fechaIngreso = new Date('2000-01-01');
-  if (!fechaAlta) fechaAlta = fechaIngreso;
-
-  // Cálculo seguro para TS strict mode
-  let diasEstadaCalculados = 0;
-  if (fechaIngreso && fechaAlta) {
-    diasEstadaCalculados = Math.max(
-      0,
-      Math.round((fechaAlta.getTime() - fechaIngreso.getTime()) / 86400000)
-    );
-  }
+  const fechaIngreso = parseExcelDate(row['Fecha Ingreso completa']);
+  const fechaAlta = parseExcelDate(row['Fecha Completa']);
+  const diasEstada = Math.round((fechaAlta.getTime() - fechaIngreso.getTime()) / 86400000);
+  const diasEstadaCalculados = diasEstada >= 0 ? diasEstada : 0;
 
   // Calcular inlier/outlier automáticamente basándose en días de estadía vs punto corte del GRD
   // NO usar el valor del archivo maestro, calcularlo automáticamente
@@ -668,7 +648,10 @@ router.post('/upload', requireAuth, upload.single('file'), async (req: Request, 
       });
       const sheetName = workbook.SheetNames[0];
       const worksheet = workbook.Sheets[sheetName];
-      data = XLSX.utils.sheet_to_json(worksheet) as RawRow[];
+      data = XLSX.utils.sheet_to_json(worksheet, {
+        raw: true,        // <--- deja números Excel intactos
+        cellDates: false,
+      }) as RawRow[];
     }
 
     // 2. Validar cada fila (asíncronamente)
