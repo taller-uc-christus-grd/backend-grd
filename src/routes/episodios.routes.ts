@@ -93,6 +93,57 @@ function calcularMontoFinal(
 }
 
 /**
+ * Calcula los días de estadía basándose en fecha de ingreso y fecha de alta
+ */
+function calcularDiasEstada(
+  fechaIngreso: Date | null | undefined,
+  fechaAlta: Date | null | undefined
+): number {
+  if (!fechaIngreso || !fechaAlta) return 0;
+  const diff = Math.round((fechaAlta.getTime() - fechaIngreso.getTime()) / 86400000);
+  return diff >= 0 ? diff : 0;
+}
+
+/**
+ * Calcula automáticamente si un episodio es Inlier o Outlier
+ * basándose en los días de estadía vs punto corte superior/inferior del GRD
+ * @param diasEstada Días de estadía del episodio
+ * @param puntoCorteInf Punto corte inferior del GRD
+ * @param puntoCorteSup Punto corte superior del GRD
+ * @returns 'Inlier', 'Outlier Superior', 'Outlier Inferior' o null si no se puede determinar
+ */
+function calcularInlierOutlier(
+  diasEstada: number | null | undefined,
+  puntoCorteInf: number | null | undefined,
+  puntoCorteSup: number | null | undefined
+): string | null {
+  if (diasEstada === null || diasEstada === undefined) {
+    return null;
+  }
+  
+  const puntoInf = puntoCorteInf !== null && puntoCorteInf !== undefined ? Number(puntoCorteInf) : null;
+  const puntoSup = puntoCorteSup !== null && puntoCorteSup !== undefined ? Number(puntoCorteSup) : null;
+  
+  // Si no hay puntos de corte, no se puede determinar
+  if (puntoInf === null && puntoSup === null) {
+    return null;
+  }
+  
+  // Outlier Superior: días de estadía > punto corte superior
+  if (puntoSup !== null && diasEstada > puntoSup) {
+    return 'Outlier Superior';
+  }
+  
+  // Outlier Inferior: días de estadía < punto corte inferior
+  if (puntoInf !== null && diasEstada < puntoInf) {
+    return 'Outlier Inferior';
+  }
+  
+  // En cualquier otro caso es Inlier
+  return 'Inlier';
+}
+
+/**
  * Calcula el tramo basado en el peso GRD para convenios con sistema de tramos (FNS012, FNS026)
  * @param pesoGRD Peso GRD del episodio
  * @returns 'T1', 'T2', 'T3' o null si no se puede determinar
@@ -732,7 +783,7 @@ router.get('/episodios', requireAuth, async (req: Request, res: Response) => {
     // Construir filtro where
     const where: Prisma.EpisodioWhereInput = {};
     
-    // Filtro por convenio (solo para usuarios de finanzas)
+    // Filtro por convenio (para usuarios de finanzas y codificador)
     // Normalizar rol del usuario para comparación
     const userRole = req.user?.role || '';
     const normalizedRole = userRole
@@ -742,9 +793,10 @@ router.get('/episodios', requireAuth, async (req: Request, res: Response) => {
       .trim()
       .replace(/\s+/g, '');
     const isFinanzas = normalizedRole === 'FINANZAS';
+    const isCodificador = normalizedRole === 'CODIFICADOR';
     
-    // Solo aplicar filtro de convenio si el usuario es de finanzas
-    if (isFinanzas && convenio && convenio.trim() !== '') {
+    // Aplicar filtro de convenio si el usuario es de finanzas o codificador
+    if ((isFinanzas || isCodificador) && convenio && convenio.trim() !== '') {
       where.convenio = {
         contains: convenio.trim(),
         mode: 'insensitive', // Búsqueda case-insensitive
@@ -806,7 +858,7 @@ router.get('/episodios/final', requireAuth, async (req: Request, res: Response) 
     // Construir filtro where
     const where: Prisma.EpisodioWhereInput = {};
     
-    // Filtro por convenio (solo para usuarios de finanzas)
+    // Filtro por convenio (para usuarios de finanzas y codificador)
     // Normalizar rol del usuario para comparación
     const userRole = req.user?.role || '';
     const normalizedRole = userRole
@@ -816,9 +868,10 @@ router.get('/episodios/final', requireAuth, async (req: Request, res: Response) 
       .trim()
       .replace(/\s+/g, '');
     const isFinanzas = normalizedRole === 'FINANZAS';
+    const isCodificador = normalizedRole === 'CODIFICADOR';
     
-    // Solo aplicar filtro de convenio si el usuario es de finanzas
-    if (isFinanzas && convenio && convenio.trim() !== '') {
+    // Aplicar filtro de convenio si el usuario es de finanzas o codificador
+    if ((isFinanzas || isCodificador) && convenio && convenio.trim() !== '') {
       where.convenio = {
         contains: convenio.trim(),
         mode: 'insensitive', // Búsqueda case-insensitive
@@ -1444,13 +1497,30 @@ router.put('/episodios/:id', requireAuth, async (req: Request, res: Response) =>
 });
 
 // Esquema de validación específico para campos de codificador (PATCH)
-// Permite editar 'at', 'atDetalle', y para casos fuera de norma: 'valorGRD' y 'montoFinal'
+// Permite editar: 'at', 'atDetalle', 'diasDemoraRescate', 'pagoDemora', 'montoRN', 'pagoOutlierSup'
+// y para casos fuera de norma: 'valorGRD' y 'montoFinal'
 const codificadorSchema = Joi.object({
   at: Joi.alternatives().try(
     Joi.boolean(),
     Joi.string().valid('S', 's', 'N', 'n')
   ).optional(),
   atDetalle: Joi.string().allow(null, '').optional(),
+  diasDemoraRescate: Joi.alternatives().try(
+    Joi.number().integer().min(0),
+    Joi.string().pattern(/^\d+$/).min(0)
+  ).optional(),
+  pagoDemora: Joi.alternatives().try(
+    Joi.number().min(0),
+    Joi.string().pattern(/^\d+(\.\d+)?$/).min(0)
+  ).allow(null).optional(),
+  montoRN: Joi.alternatives().try(
+    Joi.number().min(0),
+    Joi.string().pattern(/^\d+(\.\d+)?$/).min(0)
+  ).optional(),
+  pagoOutlierSup: Joi.alternatives().try(
+    Joi.number().min(0),
+    Joi.string().pattern(/^\d+(\.\d+)?$/).min(0)
+  ).allow(null).optional(),
   valorGRD: Joi.alternatives().try(
     Joi.number().min(0),
     Joi.string().pattern(/^\d+(\.\d+)?$/).min(0)
@@ -1524,6 +1594,18 @@ const finanzasFieldMapping: Record<string, string> = {
   pagoDemora: 'pagoDemoraRescate',
   pagoOutlierSup: 'pagoOutlierSuperior',
   valorGRD: 'valorGrd', // NUEVO: para override manual
+};
+
+// Mapeo de campos del frontend a la base de datos para codificador
+const codificadorFieldMapping: Record<string, string> = {
+  at: 'atSn',
+  atDetalle: 'atDetalle',
+  diasDemoraRescate: 'diasDemoraRescate',
+  pagoDemora: 'pagoDemoraRescate',
+  montoRN: 'montoRn',
+  pagoOutlierSup: 'pagoOutlierSuperior',
+  valorGRD: 'valorGrd',
+  montoFinal: 'montoFinal',
 };
 
 // Actualizar episodio parcialmente (PATCH) - Funcionalidad de Finanzas, Gestión y Codificador
@@ -1818,6 +1900,9 @@ router.patch('/episodios/:id',
       at: 'atSn',
     };
     
+    // Determinar qué mapeo usar según el rol
+    const fieldMappingToUse = isCodificador ? codificadorFieldMapping : finanzasFieldMapping;
+    
     for (const [key, value] of Object.entries(validatedValue)) {
       
       // 5. MODIFICACIÓN: Añadir 'validado' al mapeo
@@ -1826,8 +1911,8 @@ router.patch('/episodios/:id',
         continue; // Saltar el resto del loop para esta clave
       }
 
-      // Usar mapeo común o mapeo de finanzas según corresponda
-      const dbKey = commonFieldMapping[key] || finanzasFieldMapping[key] || key;
+      // Usar mapeo común, mapeo de codificador o mapeo de finanzas según corresponda
+      const dbKey = commonFieldMapping[key] || fieldMappingToUse[key] || key;
       
       // Normalizar campos antes de guardar
       if (dbKey === 'atSn') {
@@ -2133,6 +2218,23 @@ router.patch('/episodios/:id',
     }
     updateData.montoFinal = montoFinalFinal;
 
+    // Calcular automáticamente días de estadía e inlier/outlier
+    const fechaIngreso = episodio.fechaIngreso;
+    const fechaAlta = episodio.fechaAlta;
+    const diasEstada = calcularDiasEstada(fechaIngreso, fechaAlta);
+    
+    // Calcular inlier/outlier basándose en días de estadía vs punto corte del GRD
+    if (episodio.grd) {
+      const puntoCorteInf = episodio.grd.puntoCorteInf ? Number(episodio.grd.puntoCorteInf) : null;
+      const puntoCorteSup = episodio.grd.puntoCorteSup ? Number(episodio.grd.puntoCorteSup) : null;
+      const inlierOutlierCalculado = calcularInlierOutlier(diasEstada, puntoCorteInf, puntoCorteSup);
+      
+      if (inlierOutlierCalculado !== null) {
+        updateData.inlierOutlier = inlierOutlierCalculado;
+        updateData.diasEstada = diasEstada;
+        console.log(`✅ Inlier/Outlier calculado automáticamente: ${inlierOutlierCalculado} (días: ${diasEstada}, puntoInf: ${puntoCorteInf}, puntoSup: ${puntoCorteSup})`);
+      }
+    }
 
     // Actualizar el episodio
     const updated = await prisma.episodio.update({

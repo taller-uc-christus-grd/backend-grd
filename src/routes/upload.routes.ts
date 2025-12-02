@@ -281,10 +281,50 @@ async function obtenerPrecioBaseTramo(
 /**
  * Valida una fila ANTES de procesarla.
  * ¡MODIFICADO con la validación de GRD!
+ * Permite espacios y casillas vacías en campos opcionales
  */
 async function validateRow(row: RawRow, index: number): Promise<boolean> {
-  const requiredFields = ['Episodio CMBD', 'Hospital (Descripción)', 'RUT', 'IR GRD (Código)'];
-  const missing = requiredFields.filter((f) => isEmpty(row[f]));
+  // Normalizar nombres de columnas buscando variaciones con espacios
+  const normalizeColumnName = (name: string): string | null => {
+    const normalized = name.trim().replace(/\s+/g, ' ');
+    // Buscar en todas las claves del row
+    for (const key of Object.keys(row)) {
+      const normalizedKey = key.trim().replace(/\s+/g, ' ');
+      if (normalizedKey.toLowerCase() === normalized.toLowerCase()) {
+        return key;
+      }
+    }
+    return null;
+  };
+
+  // Buscar campos requeridos con flexibilidad de espacios
+  const requiredFields = [
+    { name: 'Episodio CMBD', keys: ['Episodio CMBD', 'EpisodioCMBD', 'Episodio  CMBD'] },
+    { name: 'Hospital (Descripción)', keys: ['Hospital (Descripción)', 'Hospital(Descripción)', 'Hospital  (Descripción)'] },
+    { name: 'RUT', keys: ['RUT', 'Rut', 'rut'] },
+    { name: 'IR GRD (Código)', keys: ['IR GRD (Código)', 'IR GRD(Código)', 'IR  GRD  (Código)'] }
+  ];
+
+  const missing: string[] = [];
+  const foundFields: Record<string, string> = {};
+
+  for (const field of requiredFields) {
+    let found = false;
+    for (const key of field.keys) {
+      const actualKey = normalizeColumnName(key);
+      if (actualKey && row[actualKey] !== undefined && row[actualKey] !== null) {
+        const value = String(row[actualKey]).trim();
+        if (value !== '') {
+          foundFields[field.name] = actualKey;
+          found = true;
+          break;
+        }
+      }
+    }
+    if (!found) {
+      missing.push(field.name);
+    }
+  }
 
   if (missing.length > 0) {
     errorRecords.push({
@@ -295,21 +335,26 @@ async function validateRow(row: RawRow, index: number): Promise<boolean> {
     return false;
   }
 
-  // Validación de duplicados
-  const existing = await prisma.episodio.findFirst({
-    where: { episodioCmdb: row['Episodio CMBD'] },
-  });
-  if (existing) {
-    errorRecords.push({
-      fila: index,
-      error: `Duplicado detectado: Episodio CMBD ${row['Episodio CMBD']}`,
-      registro: row,
+  // Validación de duplicados (usar el campo encontrado)
+  const episodioKey = foundFields['Episodio CMBD'];
+  const episodioValue = cleanString(row[episodioKey]);
+  if (episodioValue) {
+    const existing = await prisma.episodio.findFirst({
+      where: { episodioCmdb: episodioValue },
     });
-    return false;
+    if (existing) {
+      errorRecords.push({
+        fila: index,
+        error: `Duplicado detectado: Episodio CMBD ${episodioValue}`,
+        registro: row,
+      });
+      return false;
+    }
   }
   
-  // ¡NUEVO! Validar que el GRD exista en nuestra tabla de Normas
-  const grdCode = cleanString(row['IR GRD (Código)']);
+  // Validar que el GRD exista en nuestra tabla de Normas
+  const grdKey = foundFields['IR GRD (Código)'];
+  const grdCode = cleanString(row[grdKey]);
   if (grdCode) {
     const grdRule = await prisma.grd.findUnique({ where: { codigo: grdCode }});
     if (!grdRule) {
@@ -329,25 +374,36 @@ async function validateRow(row: RawRow, index: number): Promise<boolean> {
       return false;
   }
 
-  if (!isValidDate(row['Fecha Ingreso completa']) || !isValidDate(row['Fecha Completa'])) {
+  // Validar fechas (permitir espacios pero deben ser válidas si están presentes)
+  const fechaIngresoKey = normalizeColumnName('Fecha Ingreso completa') || 'Fecha Ingreso completa';
+  const fechaAltaKey = normalizeColumnName('Fecha Completa') || 'Fecha Completa';
+  
+  const fechaIngreso = row[fechaIngresoKey];
+  const fechaAlta = row[fechaAltaKey];
+  
+  // Solo validar fechas si tienen valor (permitir vacíos)
+  if (fechaIngreso && String(fechaIngreso).trim() !== '' && !isValidDate(fechaIngreso)) {
     errorRecords.push({
       fila: index,
-      error: 'Fecha inválida en ingreso o alta',
+      error: 'Fecha de ingreso inválida',
+      registro: row,
+    });
+    return false;
+  }
+  
+  if (fechaAlta && String(fechaAlta).trim() !== '' && !isValidDate(fechaAlta)) {
+    errorRecords.push({
+      fila: index,
+      error: 'Fecha de alta inválida',
       registro: row,
     });
     return false;
   }
 
-  const fieldsCamposBlancoPermitidos = [
-    'Estado RN',
-    'AT',
-    'AT Detalle',
-    'Monto AT',
-    'Monto RN',
-    'Días Demora Rescate',
-    'Pago Demora Rescate',
-    'Pago Outlier Superior'
-  ];
+  // Los siguientes campos pueden estar vacíos o con espacios:
+  // 'Estado RN', 'AT', 'AT Detalle', 'Monto AT', 'Monto RN', 
+  // 'Días Demora Rescate', 'Pago Demora Rescate', 'Pago Outlier Superior'
+  // No se validan aquí, se procesan con valores por defecto en processRow
 
   return true;
 }
