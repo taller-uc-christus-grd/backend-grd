@@ -536,8 +536,10 @@ async function processRow(row: RawRow) {
   const pagoOutlierSuperior = isNumeric(row['Pago Outlier Superior']) ? parseFloat(row['Pago Outlier Superior']) : 0;
 
   // Calcular días de estadía desde las fechas del archivo maestro
-  const fechaIngreso = parseExcelDate(row['Fecha Ingreso completa']);
-  const fechaAlta = parseExcelDate(row['Fecha Completa']);
+  const fechaIngreso = parseExcelDate(row['Fecha Ingreso completa']) ?? new Date(0);
+  const fechaAlta = parseExcelDate(row['Fecha Completa']) ?? new Date(0);
+
+  // TS ya no reclama porque ambas siempre son Date
   const diasEstada = Math.round((fechaAlta.getTime() - fechaIngreso.getTime()) / 86400000);
   const diasEstadaCalculados = diasEstada >= 0 ? diasEstada : 0;
 
@@ -649,8 +651,7 @@ router.post('/upload', requireAuth, upload.single('file'), async (req: Request, 
       const sheetName = workbook.SheetNames[0];
       const worksheet = workbook.Sheets[sheetName];
       data = XLSX.utils.sheet_to_json(worksheet, {
-        raw: true,        // <--- deja números Excel intactos
-        cellDates: false,
+        raw: true,
       }) as RawRow[];
     }
 
