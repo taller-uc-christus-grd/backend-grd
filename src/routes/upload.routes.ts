@@ -81,11 +81,16 @@ function isEmpty(value?: any): boolean {
 }
 
 function parseExcelDate(value: any): Date | null {
-  if (!value) return null;
+  if (value === null || value === undefined || value === '') {
+    return null;
+  }
 
   // ✔ Ya viene como Date desde XLSX (cuando cellDates: true)
-  if (value instanceof Date && !isNaN(value.getTime())) {
-    return value;
+  if (value instanceof Date) {
+    if (!isNaN(value.getTime())) {
+      return value;
+    }
+    return null;
   }
 
   // ✔ Número de Excel (días desde 1900)
@@ -93,16 +98,29 @@ function parseExcelDate(value: any): Date | null {
   if (typeof value === 'number' && !isNaN(value)) {
     // Si el número es muy grande, probablemente no es una fecha de Excel
     if (value > 0 && value < 100000) {
-      // Excel cuenta desde el 30 de diciembre de 1899 (día 0)
-      // Pero hay un bug conocido: Excel trata 1900 como año bisiesto aunque no lo es
-      // Por eso usamos el 30 de diciembre de 1899 como base
-      const excelEpoch = new Date(Date.UTC(1899, 11, 30));
-      // Restamos 1 porque Excel cuenta el día 1 como 1 de enero de 1900
+      // Excel cuenta desde el 1 de enero de 1900 (día 1)
+      // Pero Excel tiene un bug: trata 1900 como año bisiesto aunque no lo es
+      // El epoch de Excel es el 30 de diciembre de 1899 a las 00:00:00 UTC
+      // Día 1 = 1 de enero de 1900
+      // Día 2 = 2 de enero de 1900
+      // etc.
+      
+      // Usar el método más preciso para convertir números de serie de Excel
+      // Excel epoch: 30 de diciembre de 1899
+      const excelEpoch = new Date(Date.UTC(1899, 11, 30, 0, 0, 0));
+      // El número de serie de Excel incluye la parte decimal para horas/minutos/segundos
+      // Multiplicar por milisegundos por día (86400000)
       const fecha = new Date(excelEpoch.getTime() + (value - 1) * 86400000);
-      // Verificar que la fecha sea válida y razonable (después de 1900)
-      if (!isNaN(fecha.getTime()) && fecha.getFullYear() >= 1900) {
+      
+      // Verificar que la fecha sea válida y razonable (después de 1900 y antes de 2100)
+      if (!isNaN(fecha.getTime()) && fecha.getFullYear() >= 1900 && fecha.getFullYear() < 2100) {
+        console.log(`✅ Número de serie Excel convertido: ${value} -> ${fecha.toISOString()}`);
         return fecha;
+      } else {
+        console.warn(`⚠️ Número de serie Excel resultó en fecha inválida: ${value} -> ${fecha.toISOString()}`);
       }
+    } else {
+      console.warn(`⚠️ Número fuera del rango esperado para fecha Excel: ${value}`);
     }
     return null;
   }
@@ -112,8 +130,11 @@ function parseExcelDate(value: any): Date | null {
     const dateStr = value.trim();
     if (!dateStr) return null;
 
+    console.log(`🔍 Intentando parsear string de fecha: "${dateStr}"`);
+
     // Formato DD-MM-YYYY HH:mm:ss o DD/MM/YYYY HH:mm:ss
     // Ejemplo: "21-12-2024  13:00:00" o "12-02-2025  17:00:00"
+    // Nota: puede haber múltiples espacios entre la fecha y la hora
     const ddmmyyyyPattern = /^(\d{1,2})[-\/](\d{1,2})[-\/](\d{4})(?:\s+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?/;
     const match = dateStr.match(ddmmyyyyPattern);
     if (match) {
@@ -126,7 +147,10 @@ function parseExcelDate(value: any): Date | null {
       
       const fecha = new Date(year, month, day, hour, minute, second);
       if (!isNaN(fecha.getTime())) {
+        console.log(`✅ Fecha parseada desde DD-MM-YYYY: ${fecha.toISOString()}`);
         return fecha;
+      } else {
+        console.warn(`⚠️ Fecha inválida después de parsear DD-MM-YYYY: ${dateStr}`);
       }
     }
 
@@ -143,17 +167,24 @@ function parseExcelDate(value: any): Date | null {
       
       const fecha = new Date(year, month, day, hour, minute, second);
       if (!isNaN(fecha.getTime())) {
+        console.log(`✅ Fecha parseada desde YYYY-MM-DD: ${fecha.toISOString()}`);
         return fecha;
+      } else {
+        console.warn(`⚠️ Fecha inválida después de parsear YYYY-MM-DD: ${dateStr}`);
       }
     }
 
     // Intentar parsear con Date nativo (último recurso)
     const d = new Date(dateStr);
     if (!isNaN(d.getTime())) {
+      console.log(`✅ Fecha parseada con Date nativo: ${d.toISOString()}`);
       return d;
+    } else {
+      console.warn(`⚠️ Date nativo no pudo parsear: ${dateStr}`);
     }
   }
 
+  console.warn(`⚠️ No se pudo parsear fecha. Tipo: ${typeof value}, Valor: ${value}`);
   return null;
 }
 
@@ -594,23 +625,28 @@ async function processRow(row: RawRow) {
 
   // Buscar columnas de fechas de manera flexible
   const getFechaColumn = (possibleNames: string[]): string | null => {
+    // Primero buscar coincidencia exacta
     for (const name of possibleNames) {
       if (name in row && row[name] !== undefined && row[name] !== null && String(row[name]).trim() !== '') {
+        console.log(`✅ Columna de fecha encontrada (exacta): "${name}" = ${row[name]} (tipo: ${typeof row[name]})`);
         return name;
       }
     }
-    // Buscar por coincidencia parcial
+    // Buscar por coincidencia parcial (case-insensitive)
     for (const key in row) {
       const normalizedKey = key.toLowerCase().trim().replace(/\s+/g, ' ');
       for (const name of possibleNames) {
         const normalizedName = name.toLowerCase().trim().replace(/\s+/g, ' ');
         if (normalizedKey.includes(normalizedName) || normalizedName.includes(normalizedKey)) {
           if (row[key] !== undefined && row[key] !== null && String(row[key]).trim() !== '') {
+            console.log(`✅ Columna de fecha encontrada (parcial): "${key}" = ${row[key]} (tipo: ${typeof row[key]})`);
             return key;
           }
         }
       }
     }
+    console.warn(`⚠️ No se encontró columna de fecha. Buscando: ${possibleNames.join(', ')}`);
+    console.log(`   Columnas disponibles: ${Object.keys(row).join(', ')}`);
     return null;
   };
 
@@ -630,38 +666,88 @@ async function processRow(row: RawRow) {
     'fecha alta'
   ]);
 
-  // Parsear fechas - pueden venir como ISO strings o como valores originales
+  // Parsear fechas - pueden venir como ISO strings, números de serie, strings con formato, o Date objects
   let fechaIngreso: Date | null = null;
   let fechaAlta: Date | null = null;
 
   if (fechaIngresoKey) {
     const fechaIngresoValue = row[fechaIngresoKey];
-    // Si ya es un string ISO, parsearlo directamente
-    if (typeof fechaIngresoValue === 'string' && fechaIngresoValue.includes('T')) {
-      fechaIngreso = new Date(fechaIngresoValue);
-    } else {
-      fechaIngreso = parseExcelDate(fechaIngresoValue);
+    console.log(`📅 Parseando fecha de ingreso. Clave: "${fechaIngresoKey}", Valor: ${fechaIngresoValue}, Tipo: ${typeof fechaIngresoValue}`);
+    
+    // Si ya es un objeto Date válido
+    if (fechaIngresoValue instanceof Date && !isNaN(fechaIngresoValue.getTime())) {
+      fechaIngreso = fechaIngresoValue;
+      console.log(`✅ Fecha de ingreso es Date object: ${fechaIngreso.toISOString()}`);
     }
+    // Si es un string ISO
+    else if (typeof fechaIngresoValue === 'string' && fechaIngresoValue.includes('T')) {
+      fechaIngreso = new Date(fechaIngresoValue);
+      if (isNaN(fechaIngreso.getTime())) {
+        console.warn(`⚠️ String ISO inválido para fecha de ingreso: ${fechaIngresoValue}`);
+        fechaIngreso = null;
+      } else {
+        console.log(`✅ Fecha de ingreso parseada desde ISO string: ${fechaIngreso.toISOString()}`);
+      }
+    }
+    // Intentar parsear con parseExcelDate
+    else {
+      fechaIngreso = parseExcelDate(fechaIngresoValue);
+      if (fechaIngreso) {
+        console.log(`✅ Fecha de ingreso parseada con parseExcelDate: ${fechaIngreso.toISOString()}`);
+      } else {
+        console.warn(`⚠️ parseExcelDate no pudo parsear fecha de ingreso: ${fechaIngresoValue} (tipo: ${typeof fechaIngresoValue})`);
+      }
+    }
+  } else {
+    console.warn(`⚠️ No se encontró columna de fecha de ingreso para episodio ${row['Episodio CMBD']}`);
   }
 
   if (fechaAltaKey) {
     const fechaAltaValue = row[fechaAltaKey];
-    // Si ya es un string ISO, parsearlo directamente
-    if (typeof fechaAltaValue === 'string' && fechaAltaValue.includes('T')) {
-      fechaAlta = new Date(fechaAltaValue);
-    } else {
-      fechaAlta = parseExcelDate(fechaAltaValue);
+    console.log(`📅 Parseando fecha de alta. Clave: "${fechaAltaKey}", Valor: ${fechaAltaValue}, Tipo: ${typeof fechaAltaValue}`);
+    
+    // Si ya es un objeto Date válido
+    if (fechaAltaValue instanceof Date && !isNaN(fechaAltaValue.getTime())) {
+      fechaAlta = fechaAltaValue;
+      console.log(`✅ Fecha de alta es Date object: ${fechaAlta.toISOString()}`);
     }
+    // Si es un string ISO
+    else if (typeof fechaAltaValue === 'string' && fechaAltaValue.includes('T')) {
+      fechaAlta = new Date(fechaAltaValue);
+      if (isNaN(fechaAlta.getTime())) {
+        console.warn(`⚠️ String ISO inválido para fecha de alta: ${fechaAltaValue}`);
+        fechaAlta = null;
+      } else {
+        console.log(`✅ Fecha de alta parseada desde ISO string: ${fechaAlta.toISOString()}`);
+      }
+    }
+    // Intentar parsear con parseExcelDate
+    else {
+      fechaAlta = parseExcelDate(fechaAltaValue);
+      if (fechaAlta) {
+        console.log(`✅ Fecha de alta parseada con parseExcelDate: ${fechaAlta.toISOString()}`);
+      } else {
+        console.warn(`⚠️ parseExcelDate no pudo parsear fecha de alta: ${fechaAltaValue} (tipo: ${typeof fechaAltaValue})`);
+      }
+    }
+  } else {
+    console.warn(`⚠️ No se encontró columna de fecha de alta para episodio ${row['Episodio CMBD']}`);
   }
 
   // Si no se pudieron parsear las fechas, usar fecha por defecto (pero loguear el error)
   if (!fechaIngreso || isNaN(fechaIngreso.getTime())) {
-    console.warn(`⚠️ No se pudo parsear fecha de ingreso para episodio ${row['Episodio CMBD']}. Valor: ${fechaIngresoKey ? row[fechaIngresoKey] : 'columna no encontrada'}`);
+    console.error(`❌ ERROR: No se pudo parsear fecha de ingreso para episodio ${row['Episodio CMBD']}.`);
+    console.error(`   Columna encontrada: ${fechaIngresoKey || 'NINGUNA'}`);
+    console.error(`   Valor original: ${fechaIngresoKey ? row[fechaIngresoKey] : 'N/A'}`);
+    console.error(`   Tipo del valor: ${fechaIngresoKey ? typeof row[fechaIngresoKey] : 'N/A'}`);
     fechaIngreso = new Date(0); // Fecha por defecto
   }
 
   if (!fechaAlta || isNaN(fechaAlta.getTime())) {
-    console.warn(`⚠️ No se pudo parsear fecha de alta para episodio ${row['Episodio CMBD']}. Valor: ${fechaAltaKey ? row[fechaAltaKey] : 'columna no encontrada'}`);
+    console.error(`❌ ERROR: No se pudo parsear fecha de alta para episodio ${row['Episodio CMBD']}.`);
+    console.error(`   Columna encontrada: ${fechaAltaKey || 'NINGUNA'}`);
+    console.error(`   Valor original: ${fechaAltaKey ? row[fechaAltaKey] : 'N/A'}`);
+    console.error(`   Tipo del valor: ${fechaAltaKey ? typeof row[fechaAltaKey] : 'N/A'}`);
     fechaAlta = new Date(0); // Fecha por defecto
   }
 
@@ -783,37 +869,21 @@ router.post('/upload', requireAuth, upload.single('file'), async (req: Request, 
         dateNF: 'dd/mm/yyyy' // Formato de fecha esperado
       }) as RawRow[];
       
-      // Procesar fechas manualmente para asegurar que se conviertan correctamente
-      // Buscar columnas de fechas de manera flexible
-      const fechaColumnPatterns = [
-        'Fecha Ingreso completa',
-        'Fecha Completa',
-        'Fecha Ingreso',
-        'Fecha Alta',
-        'fecha ingreso',
-        'fecha completa',
-        'fecha alta'
-      ];
-      
-      data.forEach((row: RawRow) => {
-        Object.keys(row).forEach(key => {
+      // NO convertir fechas a ISO strings aquí - dejarlas como están para que processRow las procese
+      // Las fechas pueden venir como números de serie, strings, o Date objects
+      // processRow se encargará de parsearlas correctamente
+      console.log(`📊 Archivo Excel leído. Total de filas: ${data.length}`);
+      if (data.length > 0) {
+        console.log(`📋 Columnas encontradas: ${Object.keys(data[0]).join(', ')}`);
+        // Mostrar una muestra de los valores de fecha para debugging
+        const primeraFila = data[0];
+        Object.keys(primeraFila).forEach(key => {
           const normalizedKey = key.toLowerCase().trim().replace(/\s+/g, ' ');
-          // Verificar si la columna es una fecha
-          const isFechaColumn = fechaColumnPatterns.some(pattern => 
-            normalizedKey.includes(pattern.toLowerCase().replace(/\s+/g, ''))
-          );
-          
-          if (isFechaColumn && row[key] !== undefined && row[key] !== null && row[key] !== '') {
-            const parsedDate = parseExcelDate(row[key]);
-            if (parsedDate) {
-              // Convertir a formato ISO string para mantener consistencia
-              row[key] = parsedDate.toISOString();
-            } else {
-              console.warn(`⚠️ No se pudo parsear fecha en columna "${key}": ${row[key]}`);
-            }
+          if (normalizedKey.includes('fecha')) {
+            console.log(`   "${key}": ${primeraFila[key]} (tipo: ${typeof primeraFila[key]})`);
           }
         });
-      });
+      }
     }
 
     // 2. Validar cada fila (asíncronamente)
