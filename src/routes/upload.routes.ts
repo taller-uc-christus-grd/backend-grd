@@ -89,15 +89,72 @@ function parseExcelDate(value: any): Date | null {
   }
 
   // ✔ Número de Excel (días desde 1900)
+  // Los números de serie de Excel suelen estar entre 1 y ~100000
   if (typeof value === 'number' && !isNaN(value)) {
-    const excelEpoch = new Date(Date.UTC(1899, 11, 30));
-    const fecha = new Date(excelEpoch.getTime() + value * 86400000);
-    return fecha;
+    // Si el número es muy grande, probablemente no es una fecha de Excel
+    if (value > 0 && value < 100000) {
+      // Excel cuenta desde el 30 de diciembre de 1899 (día 0)
+      // Pero hay un bug conocido: Excel trata 1900 como año bisiesto aunque no lo es
+      // Por eso usamos el 30 de diciembre de 1899 como base
+      const excelEpoch = new Date(Date.UTC(1899, 11, 30));
+      // Restamos 1 porque Excel cuenta el día 1 como 1 de enero de 1900
+      const fecha = new Date(excelEpoch.getTime() + (value - 1) * 86400000);
+      // Verificar que la fecha sea válida y razonable (después de 1900)
+      if (!isNaN(fecha.getTime()) && fecha.getFullYear() >= 1900) {
+        return fecha;
+      }
+    }
+    return null;
   }
 
-  // ✔ String tipo "2024-01-15" o "15/01/2024"
-  const d = new Date(value);
-  return isNaN(d.getTime()) ? null : d;
+  // ✔ String - intentar múltiples formatos
+  if (typeof value === 'string') {
+    const dateStr = value.trim();
+    if (!dateStr) return null;
+
+    // Formato DD-MM-YYYY HH:mm:ss o DD/MM/YYYY HH:mm:ss
+    // Ejemplo: "21-12-2024  13:00:00" o "12-02-2025  17:00:00"
+    const ddmmyyyyPattern = /^(\d{1,2})[-\/](\d{1,2})[-\/](\d{4})(?:\s+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?/;
+    const match = dateStr.match(ddmmyyyyPattern);
+    if (match) {
+      const day = parseInt(match[1], 10);
+      const month = parseInt(match[2], 10) - 1; // Meses en JS son 0-indexed
+      const year = parseInt(match[3], 10);
+      const hour = match[4] ? parseInt(match[4], 10) : 0;
+      const minute = match[5] ? parseInt(match[5], 10) : 0;
+      const second = match[6] ? parseInt(match[6], 10) : 0;
+      
+      const fecha = new Date(year, month, day, hour, minute, second);
+      if (!isNaN(fecha.getTime())) {
+        return fecha;
+      }
+    }
+
+    // Formato YYYY-MM-DD HH:mm:ss
+    const yyyymmddPattern = /^(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})(?:\s+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?/;
+    const match2 = dateStr.match(yyyymmddPattern);
+    if (match2) {
+      const year = parseInt(match2[1], 10);
+      const month = parseInt(match2[2], 10) - 1;
+      const day = parseInt(match2[3], 10);
+      const hour = match2[4] ? parseInt(match2[4], 10) : 0;
+      const minute = match2[5] ? parseInt(match2[5], 10) : 0;
+      const second = match2[6] ? parseInt(match2[6], 10) : 0;
+      
+      const fecha = new Date(year, month, day, hour, minute, second);
+      if (!isNaN(fecha.getTime())) {
+        return fecha;
+      }
+    }
+
+    // Intentar parsear con Date nativo (último recurso)
+    const d = new Date(dateStr);
+    if (!isNaN(d.getTime())) {
+      return d;
+    }
+  }
+
+  return null;
 }
 
 
@@ -535,9 +592,78 @@ async function processRow(row: RawRow) {
   const pagoDemoraRescate = isNumeric(row['Pago Demora Rescate']) ? parseFloat(row['Pago Demora Rescate']) : 0;
   const pagoOutlierSuperior = isNumeric(row['Pago Outlier Superior']) ? parseFloat(row['Pago Outlier Superior']) : 0;
 
-  // Calcular días de estadía desde las fechas del archivo maestro
-  const fechaIngreso = parseExcelDate(row['Fecha Ingreso completa']) ?? new Date(0);
-  const fechaAlta = parseExcelDate(row['Fecha Completa']) ?? new Date(0);
+  // Buscar columnas de fechas de manera flexible
+  const getFechaColumn = (possibleNames: string[]): string | null => {
+    for (const name of possibleNames) {
+      if (name in row && row[name] !== undefined && row[name] !== null && String(row[name]).trim() !== '') {
+        return name;
+      }
+    }
+    // Buscar por coincidencia parcial
+    for (const key in row) {
+      const normalizedKey = key.toLowerCase().trim().replace(/\s+/g, ' ');
+      for (const name of possibleNames) {
+        const normalizedName = name.toLowerCase().trim().replace(/\s+/g, ' ');
+        if (normalizedKey.includes(normalizedName) || normalizedName.includes(normalizedKey)) {
+          if (row[key] !== undefined && row[key] !== null && String(row[key]).trim() !== '') {
+            return key;
+          }
+        }
+      }
+    }
+    return null;
+  };
+
+  const fechaIngresoKey = getFechaColumn([
+    'Fecha Ingreso completa',
+    'Fecha Ingreso',
+    'Fecha de Ingreso',
+    'fecha ingreso completa',
+    'fecha ingreso'
+  ]);
+  
+  const fechaAltaKey = getFechaColumn([
+    'Fecha Completa',
+    'Fecha Alta',
+    'Fecha de Alta',
+    'fecha completa',
+    'fecha alta'
+  ]);
+
+  // Parsear fechas - pueden venir como ISO strings o como valores originales
+  let fechaIngreso: Date | null = null;
+  let fechaAlta: Date | null = null;
+
+  if (fechaIngresoKey) {
+    const fechaIngresoValue = row[fechaIngresoKey];
+    // Si ya es un string ISO, parsearlo directamente
+    if (typeof fechaIngresoValue === 'string' && fechaIngresoValue.includes('T')) {
+      fechaIngreso = new Date(fechaIngresoValue);
+    } else {
+      fechaIngreso = parseExcelDate(fechaIngresoValue);
+    }
+  }
+
+  if (fechaAltaKey) {
+    const fechaAltaValue = row[fechaAltaKey];
+    // Si ya es un string ISO, parsearlo directamente
+    if (typeof fechaAltaValue === 'string' && fechaAltaValue.includes('T')) {
+      fechaAlta = new Date(fechaAltaValue);
+    } else {
+      fechaAlta = parseExcelDate(fechaAltaValue);
+    }
+  }
+
+  // Si no se pudieron parsear las fechas, usar fecha por defecto (pero loguear el error)
+  if (!fechaIngreso || isNaN(fechaIngreso.getTime())) {
+    console.warn(`⚠️ No se pudo parsear fecha de ingreso para episodio ${row['Episodio CMBD']}. Valor: ${fechaIngresoKey ? row[fechaIngresoKey] : 'columna no encontrada'}`);
+    fechaIngreso = new Date(0); // Fecha por defecto
+  }
+
+  if (!fechaAlta || isNaN(fechaAlta.getTime())) {
+    console.warn(`⚠️ No se pudo parsear fecha de alta para episodio ${row['Episodio CMBD']}. Valor: ${fechaAltaKey ? row[fechaAltaKey] : 'columna no encontrada'}`);
+    fechaAlta = new Date(0); // Fecha por defecto
+  }
 
   // TS ya no reclama porque ambas siempre son Date
   const diasEstada = Math.round((fechaAlta.getTime() - fechaIngreso.getTime()) / 86400000);
@@ -645,14 +771,49 @@ router.post('/upload', requireAuth, upload.single('file'), async (req: Request, 
       });
     } else {
       const workbook = XLSX.readFile(filePath, {
-        cellDates: true,
-        raw: false
+        cellDates: true, // Intentar parsear fechas automáticamente
+        cellNF: false,
+        cellText: false
       });
       const sheetName = workbook.SheetNames[0];
       const worksheet = workbook.Sheets[sheetName];
       data = XLSX.utils.sheet_to_json(worksheet, {
-        raw: true,
+        raw: false, // No usar raw para que XLSX intente parsear fechas
+        defval: '',
+        dateNF: 'dd/mm/yyyy' // Formato de fecha esperado
       }) as RawRow[];
+      
+      // Procesar fechas manualmente para asegurar que se conviertan correctamente
+      // Buscar columnas de fechas de manera flexible
+      const fechaColumnPatterns = [
+        'Fecha Ingreso completa',
+        'Fecha Completa',
+        'Fecha Ingreso',
+        'Fecha Alta',
+        'fecha ingreso',
+        'fecha completa',
+        'fecha alta'
+      ];
+      
+      data.forEach((row: RawRow) => {
+        Object.keys(row).forEach(key => {
+          const normalizedKey = key.toLowerCase().trim().replace(/\s+/g, ' ');
+          // Verificar si la columna es una fecha
+          const isFechaColumn = fechaColumnPatterns.some(pattern => 
+            normalizedKey.includes(pattern.toLowerCase().replace(/\s+/g, ''))
+          );
+          
+          if (isFechaColumn && row[key] !== undefined && row[key] !== null && row[key] !== '') {
+            const parsedDate = parseExcelDate(row[key]);
+            if (parsedDate) {
+              // Convertir a formato ISO string para mantener consistencia
+              row[key] = parsedDate.toISOString();
+            } else {
+              console.warn(`⚠️ No se pudo parsear fecha en columna "${key}": ${row[key]}`);
+            }
+          }
+        });
+      });
     }
 
     // 2. Validar cada fila (asíncronamente)

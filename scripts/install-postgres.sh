@@ -74,3 +74,4 @@ echo "  2. Generar Prisma Client: npx prisma generate"
 echo "  3. Iniciar servidor: npm run dev"
 echo ""
 
+

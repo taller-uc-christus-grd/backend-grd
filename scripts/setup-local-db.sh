@@ -58,3 +58,4 @@ echo "  3. (Opcional) Poblar datos: npm run seed"
 echo "  4. Iniciar servidor: npm run dev"
 echo ""
 
+
