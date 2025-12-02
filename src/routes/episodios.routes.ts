@@ -656,11 +656,51 @@ function normalizeEpisodeResponse(episode: any): any {
       console.log(`   episode.pesoGrd raw: ${episode.pesoGrd} (tipo: ${typeof episode.pesoGrd})`);
       return pesoGrdValue;
     })(), // "Peso GRD Medio (Todos)" - viene del modelo Episodio
-    inlierOutlier: episode.inlierOutlier || '',
+    // RECALCULAR inlierOutlier automáticamente si tenemos los datos necesarios
+    inlierOutlier: (() => {
+      // Calcular días de estadía desde fechas si no está guardado
+      let diasEstada = toInteger(episode.diasEstada);
+      if (diasEstada === null && episode.fechaIngreso && episode.fechaAlta) {
+        diasEstada = calcularDiasEstada(episode.fechaIngreso, episode.fechaAlta);
+      }
+      
+      // Si tenemos días de estadía y GRD con puntos de corte, recalcular
+      if (diasEstada !== null && diasEstada !== undefined && episode.grd) {
+        const puntoCorteInf = episode.grd.puntoCorteInf ? Number(episode.grd.puntoCorteInf) : null;
+        const puntoCorteSup = episode.grd.puntoCorteSup ? Number(episode.grd.puntoCorteSup) : null;
+        
+        if (puntoCorteInf !== null && puntoCorteSup !== null) {
+          const inlierOutlierCalculado = calcularInlierOutlier(diasEstada, puntoCorteInf, puntoCorteSup);
+          if (inlierOutlierCalculado !== null) {
+            console.log(`📊 [normalizeEpisodeResponse] Inlier/Outlier recalculado: ${inlierOutlierCalculado} (días: ${diasEstada}, puntoInf: ${puntoCorteInf}, puntoSup: ${puntoCorteSup})`);
+            return inlierOutlierCalculado;
+          }
+        }
+      }
+      
+      // Si no se pudo recalcular, usar el valor guardado o cadena vacía
+      return episode.inlierOutlier || '';
+    })(),
     // Calcular "Grupo dentro de norma S/N" basado en "Inlier/Outlier": true si es "Inlier", false en cualquier otro caso
     grupoDentroNorma: (() => {
-      // Usar el valor original del episodio, no el normalizado
-      const inlierValue = episode.inlierOutlier;
+      // Usar el valor calculado arriba
+      const inlierValue = (() => {
+        let diasEstada = toInteger(episode.diasEstada);
+        if (diasEstada === null && episode.fechaIngreso && episode.fechaAlta) {
+          diasEstada = calcularDiasEstada(episode.fechaIngreso, episode.fechaAlta);
+        }
+        
+        if (diasEstada !== null && diasEstada !== undefined && episode.grd) {
+          const puntoCorteInf = episode.grd.puntoCorteInf ? Number(episode.grd.puntoCorteInf) : null;
+          const puntoCorteSup = episode.grd.puntoCorteSup ? Number(episode.grd.puntoCorteSup) : null;
+          
+          if (puntoCorteInf !== null && puntoCorteSup !== null) {
+            return calcularInlierOutlier(diasEstada, puntoCorteInf, puntoCorteSup);
+          }
+        }
+        
+        return episode.inlierOutlier;
+      })();
       
       // Log para TODOS los episodios temporalmente para debug
       const episodioId = episode.episodioCmdb || episode.id;
@@ -2168,6 +2208,25 @@ router.patch('/episodios/:id',
     updateData.pagoOutlierSuperior = pagoOutlierCalculado;
     console.log(`💰 Pago outlier SIEMPRE recalculado: ${pagoOutlierCalculado} (convenio: ${convenio}, FNS012: ${convenio === 'FNS012'}, outlier: ${episodio.grupoEnNorma === false})`);
 
+    // PASO 2.6: Recalcular inlierOutlier y diasEstada automáticamente SIEMPRE
+    // Esto asegura que el campo se actualice en la base de datos
+    const fechaIngreso = episodio.fechaIngreso;
+    const fechaAlta = episodio.fechaAlta;
+    const diasEstada = calcularDiasEstada(fechaIngreso, fechaAlta);
+    
+    // Calcular inlier/outlier basándose en días de estadía vs punto corte del GRD
+    if (episodio.grd) {
+      const puntoCorteInf = episodio.grd.puntoCorteInf ? Number(episodio.grd.puntoCorteInf) : null;
+      const puntoCorteSup = episodio.grd.puntoCorteSup ? Number(episodio.grd.puntoCorteSup) : null;
+      const inlierOutlierCalculado = calcularInlierOutlier(diasEstada, puntoCorteInf, puntoCorteSup);
+      
+      if (inlierOutlierCalculado !== null) {
+        updateData.inlierOutlier = inlierOutlierCalculado;
+        updateData.diasEstada = diasEstada;
+        console.log(`✅ Inlier/Outlier recalculado y actualizado en BD: ${inlierOutlierCalculado} (días: ${diasEstada}, puntoInf: ${puntoCorteInf}, puntoSup: ${puntoCorteSup})`);
+      }
+    }
+
     // PASO 3: montoFinal (SIEMPRE recalcular)
     const pagoDemoraParaMonto = updateData.pagoDemoraRescate ?? 0;
     const pagoOutlierParaMonto = updateData.pagoOutlierSuperior ?? 0;
@@ -2189,24 +2248,6 @@ router.patch('/episodios/:id',
       console.log(`✅ montoFinal SIEMPRE recalculado: ${montoFinalFinal}`);
     }
     updateData.montoFinal = montoFinalFinal;
-
-    // Calcular automáticamente días de estadía e inlier/outlier
-    const fechaIngreso = episodio.fechaIngreso;
-    const fechaAlta = episodio.fechaAlta;
-    const diasEstada = calcularDiasEstada(fechaIngreso, fechaAlta);
-    
-    // Calcular inlier/outlier basándose en días de estadía vs punto corte del GRD
-    if (episodio.grd) {
-      const puntoCorteInf = episodio.grd.puntoCorteInf ? Number(episodio.grd.puntoCorteInf) : null;
-      const puntoCorteSup = episodio.grd.puntoCorteSup ? Number(episodio.grd.puntoCorteSup) : null;
-      const inlierOutlierCalculado = calcularInlierOutlier(diasEstada, puntoCorteInf, puntoCorteSup);
-      
-      if (inlierOutlierCalculado !== null) {
-        updateData.inlierOutlier = inlierOutlierCalculado;
-        updateData.diasEstada = diasEstada;
-        console.log(`✅ Inlier/Outlier calculado automáticamente: ${inlierOutlierCalculado} (días: ${diasEstada}, puntoInf: ${puntoCorteInf}, puntoSup: ${puntoCorteSup})`);
-      }
-    }
 
     // Actualizar el episodio
     const updated = await prisma.episodio.update({
