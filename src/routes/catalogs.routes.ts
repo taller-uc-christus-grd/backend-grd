@@ -435,26 +435,22 @@ router.post('/catalogs/norma-minsal/import', requireAuth, (req: Request, res: Re
       const precioBaseEjemplo = (peso * 1000000) + 500000;
 
       // Preparar datos para upsert - Prisma acepta números directamente para Decimal
-      // NO incluir percentiles por ahora hasta que se ejecute la migración
-      // Esto evita errores si la BD no tiene esos campos aún
-      // Crear objeto explícito sin percentiles para evitar que Prisma intente insertarlos
-      const dataToUpsert: {
-        codigo: string;
-        descripcion: string;
-        peso: number;
-        puntoCorteInf: number;
-        puntoCorteSup: number;
-        precioBaseTramo: number;
-      } = {
+      // Intentar incluir percentiles si tienen valores válidos
+      // Si la BD no tiene las columnas, Prisma fallará pero el try-catch lo manejará
+      const dataToUpsert: any = {
         codigo: codigo,
         descripcion: `Descripción de ${codigo}`, // El CSV no suele tener descripción
         peso: peso,
         puntoCorteInf: pci,
         puntoCorteSup: pcs,
         precioBaseTramo: precioBaseEjemplo,
-        // IMPORTANTE: NO incluir percentiles hasta que se ejecute la migración
-        // Los campos percentil25, percentil50, percentil75 NO existen en la BD aún
       };
+      
+      // Agregar percentiles solo si tienen valores válidos (mayores a 0)
+      // Si las columnas no existen en la BD, esto causará un error que será manejado
+      if (p25 > 0) dataToUpsert.percentil25 = p25;
+      if (p50 > 0) dataToUpsert.percentil50 = p50;
+      if (p75 > 0) dataToUpsert.percentil75 = p75;
 
       try {
         const grdActualizado = await prisma.grd.upsert({
@@ -501,21 +497,60 @@ router.post('/catalogs/norma-minsal/import', requireAuth, (req: Request, res: Re
           // percentil75: p75,
         });
       } catch (e: any) {
-        console.error(`Error procesando GRD ${codigo}:`, e.message);
-        console.error('Stack:', e.stack);
-        console.error('Error code:', e.code);
-        console.error('Error name:', e.name);
-        
-        // Si es un error de conexión a la base de datos, detener el proceso
-        if (e.code === 'P1001' || e.code === 'P1002' || e.message?.includes('connect')) {
-          throw new Error(`Error de conexión a la base de datos: ${e.message}`);
+        // Si el error es porque las columnas de percentiles no existen, intentar sin percentiles
+        if (e.code === 'P2022' && e.message?.includes('percentil')) {
+          console.warn(`⚠️ GRD ${codigo}: Columnas de percentiles no existen, guardando sin percentiles...`);
+          try {
+            // Intentar guardar sin percentiles
+            const dataToUpsertSinPercentiles = {
+              codigo: codigo,
+              descripcion: `Descripción de ${codigo}`,
+              peso: peso,
+              puntoCorteInf: pci,
+              puntoCorteSup: pcs,
+              precioBaseTramo: precioBaseEjemplo,
+            };
+            
+            const grdActualizado = await prisma.grd.upsert({
+              where: { codigo: codigo },
+              update: dataToUpsertSinPercentiles,
+              create: dataToUpsertSinPercentiles,
+            });
+            
+            console.log(`✅ GRD ${codigo} guardado sin percentiles (columnas no existen aún)`);
+            successRecords.push({
+              fila: index + 1,
+              codigo: codigo,
+              peso: peso,
+              puntoCorteInf: pci,
+              puntoCorteSup: pcs,
+              nota: 'Percentiles no guardados - ejecutar migración primero',
+            });
+          } catch (e2: any) {
+            console.error(`Error procesando GRD ${codigo} (sin percentiles):`, e2.message);
+            errorRecords.push({
+              fila: index + 1,
+              error: `Error al guardar: ${e2.message}`,
+              registro: row,
+            });
+          }
+        } else {
+          console.error(`Error procesando GRD ${codigo}:`, e.message);
+          console.error('Stack:', e.stack);
+          console.error('Error code:', e.code);
+          console.error('Error name:', e.name);
+          
+          // Si es un error de conexión a la base de datos, detener el proceso
+          if (e.code === 'P1001' || e.code === 'P1002' || e.message?.includes('connect')) {
+            throw new Error(`Error de conexión a la base de datos: ${e.message}`);
+          }
+          
+          errorRecords.push({
+            fila: index + 1,
+            error: `Error al guardar: ${e.message}`,
+            registro: row,
+          });
         }
-        
-        errorRecords.push({
-          fila: index + 1,
-          error: `Error al guardar: ${e.message}`,
-          registro: row,
-        });
       }
     }
 
