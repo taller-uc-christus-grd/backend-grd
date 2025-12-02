@@ -81,30 +81,18 @@ function isEmpty(value?: any): boolean {
 }
 
 function parseExcelDate(value: any): Date | null {
-  if (value === null || value === undefined) return null;
+  if (!value) return null;
 
-  // 1) Si ya es Date válido
+  // Si ya es Date
   if (value instanceof Date && !isNaN(value.getTime())) {
     return value;
   }
 
-  // 2) Si es número (serial Excel)
-  if (isNumeric(value)) {
-    const serial = Number(value);
-    if (serial > 30000 && serial < 60000) { // rango aprox 1980-2070
-      const excelEpoch = new Date(1899, 11, 30);
-      return new Date(excelEpoch.getTime() + serial * 86400000);
-    }
-  }
-
-  // 3) Si es string
+  // Si viene como string (último recurso)
   const d = new Date(value);
-  if (!isNaN(d.getTime())) {
-    return d;
-  }
-
-  return null;
+  return isNaN(d.getTime()) ? null : d;
 }
+
 
 function isNumeric(value?: any): boolean {
   if (value === undefined || value === null) return false;
@@ -641,7 +629,10 @@ router.post('/upload', requireAuth, upload.single('file'), async (req: Request, 
           .on('error', reject);
       });
     } else {
-      const workbook = XLSX.readFile(filePath);
+      const workbook = XLSX.readFile(filePath, {
+        cellDates: true,
+        raw: false
+      });
       const sheetName = workbook.SheetNames[0];
       const worksheet = workbook.Sheets[sheetName];
       data = XLSX.utils.sheet_to_json(worksheet) as RawRow[];
